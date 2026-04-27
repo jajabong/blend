@@ -142,6 +142,7 @@ class ComplexityScorer:
             "金融",
             "架构",
             "系统",
+            "项目",
         ]
         medium_keywords = [
             "code",
@@ -164,6 +165,10 @@ class ComplexityScorer:
             "算法",
             "开发",
             "处理",
+            "检查",
+            "审计",
+            "分析",
+            "评估",
         ]
 
         prompt_lower = prompt.lower()
