@@ -1,0 +1,105 @@
+{
+  "project": "blend",
+  "version": "1.0.0",
+  "goal": "极致成本效率商用 API — 质量 > Claude Opus 4.7，成本 < 808 CNY/月",
+  "description": "Minimax 极致压缩 + Claude 质量保障 + 固定成本，对外提供标准化 API 服务",
+  "tech_stack": ["Python 3.12", "httpx", "FastAPI", "typer", "rich"],
+  "stories": [
+    {
+      "id": "story-001",
+      "name": "项目脚手架",
+      "status": "DONE",
+      "files": ["pyproject.toml", "blend/__init__.py", "blend/cli.py", "tests/"],
+      "verification": "blend --version 输出版本号，blend status 全绿",
+      "priority": 1,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-002",
+      "name": "L1 入口层 — Minimax 压缩 + 复杂度评分",
+      "status": "DONE",
+      "files": ["blend/core/layers.py", "blend/intent/scorer.py", "tests/test_l1.py"],
+      "verification": "单元测试全绿，压缩率 60-95% 验证，复杂度 1-10 评分验证",
+      "priority": 2,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-003",
+      "name": "L2 策略层 — Opus 策略生成（≤300T）",
+      "status": "DONE",
+      "files": ["blend/core/layers.py", "tests/test_l2.py"],
+      "verification": "L2 输出严格 ≤300T，输出格式 JSON 验证",
+      "priority": 3,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-004",
+      "name": "L3 执行层 — 动态模型选择",
+      "status": "DONE",
+      "files": ["blend/core/layers.py", "tests/test_l3.py"],
+      "verification": "复杂度 1-3 → Minimax，4-7 → Haiku，8-10 → Sonnet/Opus",
+      "priority": 4,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-005",
+      "name": "L4 压缩层 — Minimax 二次压缩",
+      "status": "DONE",
+      "files": ["blend/utils/compress.py", "tests/test_l4.py"],
+      "verification": "L3 >500T 时 L4 必触发，压缩率验证",
+      "priority": 5,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-006",
+      "name": "L5 终审层 — 分级质量门",
+      "status": "DONE",
+      "files": ["blend/core/enforcer.py", "tests/test_l5.py"],
+      "verification": "8 项质量门全部通过，rejection_reason 正确",
+      "priority": 6,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-007",
+      "name": "Enforcement 机制 — 禁忌自动拒绝",
+      "status": "DONE",
+      "files": ["blend/core/enforcer.py", "tests/test_enforcer.py"],
+      "verification": "8 条禁忌全部可执行，违反时自动 REJECT/HALT",
+      "priority": 7,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-008",
+      "name": "资源模型 — 额度追踪 + 降级策略",
+      "status": "DONE",
+      "files": ["blend/core/budget.py", "tests/test_budget.py"],
+      "verification": "Claude 套餐 >90% 触发降级，Gemini <50% 拒绝归集",
+      "priority": 8,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-009",
+      "name": "API 服务 — FastAPI OpenAI 兼容",
+      "status": "DONE",
+      "files": ["blend/api.py", "tests/test_api.py"],
+      "verification": "/v1/chat/completions 端点正常，blend serve 运行正常",
+      "priority": 9,
+      "completed": "2026-04-24"
+    },
+    {
+      "id": "story-010",
+      "name": "集成测试 + Smoke Test",
+      "status": "DONE",
+      "files": ["tests/test_integration.py", "tests/test_smoke.py"],
+      "verification": "blend status 全绿，pytest 覆盖率 ≥ 80%",
+      "priority": 10,
+      "completed": "2026-04-24"
+    }
+  ],
+  "milestones": {
+    "M1": ["story-001", "story-002"],
+    "M2": ["story-003", "story-004", "story-005"],
+    "M3": ["story-006", "story-007", "story-008"],
+    "M4": ["story-009", "story-010"]
+  }
+}
