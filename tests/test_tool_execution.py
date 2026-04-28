@@ -238,7 +238,9 @@ class TestOrchestratorToolLoop:
                 }],
             )
 
-            assert mock_exec.call_count == max_iter
+            # Note: orchestrator makes max_iter calls in loop + 1 final synthesis call
+            # when tools were executed and finish_reason="tool_calls"
+            assert mock_exec.call_count == max_iter + 1
 
     def test_process_messages_messages_accumulate(self) -> None:
         """After tool execution, messages list contains: user + assistant(tool_calls) + tool results."""

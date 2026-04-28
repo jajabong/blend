@@ -683,7 +683,8 @@ class TestOrchestratorProcessMessagesToolLoop:
 
             # Should stop at 10 iterations
             assert result.tool_loop_iterations == 10
-            assert mock_executor.execute_messages.call_count == 10  # 0-9 inclusive
+            # 10 loop calls + 1 final synthesis call when tools executed
+            assert mock_executor.execute_messages.call_count == 11
 
     def test_process_messages_l4_applied(self) -> None:
         """process_messages() should apply L4 when trigger fires."""
