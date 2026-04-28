@@ -113,7 +113,6 @@ class TestOrchestratorToolLoop:
 
         with patch.object(orchestrator.scorer, "score") as mock_score, \
              patch.object(orchestrator.executor, "execute_messages") as mock_exec, \
-             patch.object(orchestrator.compression_trigger, "should_compress", return_value=False), \
              patch.object(orchestrator.verifier, "verify") as mock_verify, \
              patch.object(orchestrator.enforcer, "enforce") as mock_enforce:
 
@@ -174,7 +173,6 @@ class TestOrchestratorToolLoop:
 
         with patch.object(orchestrator.scorer, "score") as mock_score, \
              patch.object(orchestrator.executor, "execute_messages") as mock_exec, \
-             patch.object(orchestrator.compression_trigger, "should_compress", return_value=False), \
              patch.object(orchestrator.verifier, "verify") as mock_verify, \
              patch.object(orchestrator.enforcer, "enforce") as mock_enforce:
 
@@ -209,7 +207,6 @@ class TestOrchestratorToolLoop:
 
         with patch.object(orchestrator.scorer, "score") as mock_score, \
              patch.object(orchestrator.executor, "execute_messages") as mock_exec, \
-             patch.object(orchestrator.compression_trigger, "should_compress", return_value=False), \
              patch.object(orchestrator.verifier, "verify") as mock_verify, \
              patch.object(orchestrator.enforcer, "enforce") as mock_enforce:
 
@@ -249,7 +246,6 @@ class TestOrchestratorToolLoop:
 
         with patch.object(orchestrator.scorer, "score") as mock_score, \
              patch.object(orchestrator.executor, "execute_messages") as mock_exec, \
-             patch.object(orchestrator.compression_trigger, "should_compress", return_value=False), \
              patch.object(orchestrator.verifier, "verify") as mock_verify, \
              patch.object(orchestrator.enforcer, "enforce") as mock_enforce:
 

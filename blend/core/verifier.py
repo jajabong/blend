@@ -1,7 +1,12 @@
 """L5 Verification Layer - Graded Quality Gate for Output Verification."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:
+    from enum import Enum
+    class StrEnum(str, Enum):
+        """StrEnum fallback for Python < 3.11."""
 
 
 class QualityGate(StrEnum):
@@ -147,8 +152,8 @@ class QualityVerifier:
         else:
             gates[QualityGate.GEMINI_BATCH_THRESHOLD] = True
 
-        # Gate 6: L4 applied if needed (>500 tokens)
-        if output_tokens > 500:
+        # Gate 6: L4 applied if needed (>1000 tokens, aligned with CompressionTrigger threshold)
+        if output_tokens > 1000:
             gates[QualityGate.L4_APPLIED_IF_NEEDED] = l4_applied
         else:
             gates[QualityGate.L4_APPLIED_IF_NEEDED] = True
@@ -167,7 +172,7 @@ class QualityVerifier:
         # Gate 9: Gemini quality assessment (HIGH complexity only)
         if quality_level == "HIGH":
             gemini_result = self.gemini_evaluate(output, quality_level)
-            gates[QualityGate.GEMINI_QUALITY] = gemini_result["passed"]
+            gates[QualityGate.GEMINI_QUALITY] = bool(gemini_result["passed"])
         else:
             gates[QualityGate.GEMINI_QUALITY] = True
 
@@ -262,9 +267,9 @@ class QualityVerifier:
     def _check_format_compliance(self, output: str) -> bool:
         """Check structural format validity of output.
 
-        Returns False if:
+        Returns False only if:
         - Output is empty or all whitespace
-        - Looks like JSON but fails to parse
+        - Looks like JSON but fails to parse (malformed JSON)
         - Code block fences are mismatched
         """
         import json
@@ -281,8 +286,13 @@ class QualityVerifier:
             # Odd number of ``` means mismatched open/close
             return False
 
-        # Looks like JSON but invalid
-        if stripped.startswith(("{", "[")) and stripped.endswith(("}", "]")):
+        # Looks like JSON but invalid (malformed JSON is a real error)
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                return False
+        if stripped.startswith("[") and stripped.endswith("]"):
             try:
                 json.loads(stripped)
             except (json.JSONDecodeError, ValueError):

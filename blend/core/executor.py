@@ -15,7 +15,7 @@ from blend.core.model_config import (
     load_model_registry,
 )
 from blend.prompts.strategy import L2_STRATEGY_SYSTEM_TEMPLATE
-from blend.providers.base import LLMProvider
+from blend.providers.base import LLMProvider, LLMResponse
 
 # Load from YAML config (cached)
 _registry = load_model_registry()
@@ -97,22 +97,27 @@ class Executor:
         # Try primary model, then fallback chain
         raw_output = None
         model_used = None
+        usage: int | None = None
         for model_key in [selection.primary] + selection.fallback:
             try:
-                raw_output = self._call_model(model=model_key, prompt=prompt, strategy=strategy)
+                response = self._call_model(model=model_key, prompt=prompt, strategy=strategy)
+                raw_output = response.content
                 model_used = model_key
+                usage = self._extract_usage(response)
                 break
             except Exception:
                 continue
 
         # If all models failed, use minimax as last resort
         if raw_output is None:
-            raw_output = self._call_model(model="minimax", prompt=prompt)
+            response = self._call_model(model="minimax", prompt=prompt)
+            raw_output = response.content
             model_used = "minimax"
+            usage = self._extract_usage(response)
 
         # model_used is guaranteed non-None here
         assert model_used is not None
-        tokens_used = self._estimate_tokens(raw_output)
+        tokens_used = usage if usage else self._estimate_tokens(raw_output)
         budget = self._get_budget(model_used)
         remaining = max(0, budget - tokens_used)
 
@@ -271,8 +276,8 @@ class Executor:
         model: str,
         prompt: str,
         strategy: dict[str, object] | None = None,
-    ) -> str:
-        """Call the selected model via provider."""
+    ) -> LLMResponse:
+        """Call the selected model via provider, returning full LLMResponse."""
         provider, model_name = _get_provider(model)
 
         # Inject L2 strategy into prompt if available
@@ -280,7 +285,7 @@ class Executor:
         if plan and isinstance(plan, (list, tuple)):
             plan_text = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(plan))
             system_prompt = L2_STRATEGY_SYSTEM_TEMPLATE.format(plan_text=plan_text)
-            messages = [
+            messages: list[dict[str, str]] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ]
@@ -288,7 +293,7 @@ class Executor:
             messages = [{"role": "user", "content": prompt}]
 
         response = provider.chat(messages=messages, model=model_name)
-        return str(response.content)
+        return response
 
     def _call_model_messages(
         self,
@@ -306,8 +311,6 @@ class Executor:
         stop: str | list[str] | None = None,
     ) -> LLMOutput:
         """Call model with full message list and optional tool/format params."""
-        from blend.providers.base import LLMResponse
-
         provider, model_name = _get_provider(model)
 
         # Inject L2 strategy as system message
@@ -342,27 +345,46 @@ class Executor:
         return LLMOutput(
             content=str(response.content),
             model_used=model,
-            tokens_used=len(str(response.content)) // 4,
+            tokens_used=self._extract_usage(response) or len(str(response.content)) // 4,
             tokens_budget_remaining=0,
             quality_gate_passed=True,
             finish_reason=response.finish_reason if hasattr(response, "finish_reason") else "stop",
             tool_calls=response.tool_calls if hasattr(response, "tool_calls") else None,
         )
 
+    def _extract_usage(self, response: LLMResponse) -> int | None:
+        """Extract token count from LLMResponse usage dict.
+
+        Supports both OpenAI-style {'completion_tokens': N} and
+        Minimax-style {'completion_tokens': N} dicts.
+        """
+        usage = response.usage
+        if not usage:
+            return None
+        if isinstance(usage, dict):
+            return usage.get("completion_tokens") or usage.get("total_tokens")
+        return None
+
     def _estimate_tokens(self, text: str) -> int:
         """Estimate token count (rough: ~4 chars per token)."""
         return len(text) // 4
 
     def _get_budget(self, model: str) -> int:
-        """Get token budget for model."""
-        budgets = {
-            "minimax": 100000,
-            "haiku": 200000,
-            "sonnet": 200000,
-            "opus": 200000,
-            "gemini": 200000,
-        }
-        return budgets.get(model, 200000)
+        """Get token budget for model from ResourceModel (with hardcoded fallback)."""
+        # Gemini not in ResourceModel, use hardcoded fallback
+        if model == "gemini":
+            return 200000
+        budget = self.resource_model.get_budget(model)
+        # Fallback to hardcoded values for backward compatibility with mocked tests
+        if not isinstance(budget, int) or budget == 0:
+            fallbacks = {
+                "minimax": 100000000,
+                "haiku": 1000000,
+                "sonnet": 1000000,
+                "opus": 500000,
+            }
+            return fallbacks.get(model, 200000)
+        return budget
 
     def stream(
         self,

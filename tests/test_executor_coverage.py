@@ -26,13 +26,14 @@ class TestExecutorGetBudget:
     """Test _get_budget method."""
 
     def test_all_models_have_budget(self) -> None:
-        """All known models return a budget."""
+        """All known models return a budget from ResourceModel."""
         executor = Executor()
-        assert executor._get_budget("minimax") == 100000
-        assert executor._get_budget("haiku") == 200000
-        assert executor._get_budget("sonnet") == 200000
-        assert executor._get_budget("opus") == 200000
-        assert executor._get_budget("gemini") == 200000
+        # Values from ResourceModel.BUDGETS + gemini hardcoded fallback
+        assert executor._get_budget("minimax") == 100_000_000
+        assert executor._get_budget("haiku") == 1_000_000
+        assert executor._get_budget("sonnet") == 1_000_000
+        assert executor._get_budget("opus") == 500_000
+        assert executor._get_budget("gemini") == 200_000
 
     def test_unknown_model_default_budget(self) -> None:
         """Unknown model returns default budget."""

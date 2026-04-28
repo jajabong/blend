@@ -3,30 +3,30 @@
 from unittest.mock import MagicMock
 
 
-class TestL4Threshold200:
-    """L4 should trigger at 200T (not 500T)."""
+class TestL4Threshold1000:
+    """L4 should trigger at 1000T (aligned with L5 Gate 6 threshold)."""
 
-    def test_threshold_200_triggers_at_201(self) -> None:
-        """Token count > 200 should trigger compression."""
+    def test_threshold_1000_triggers_at_1001(self) -> None:
+        """Token count > 1000 should trigger compression."""
         from blend.core.compression import CompressionTrigger
 
-        trigger = CompressionTrigger(threshold=200)
-        assert trigger.should_compress(201) is True
-        assert trigger.should_compress(200) is False
-        assert trigger.should_compress(199) is False
+        trigger = CompressionTrigger(threshold=1000)
+        assert trigger.should_compress(1001) is True
+        assert trigger.should_compress(1000) is False
+        assert trigger.should_compress(999) is False
 
-    def test_default_threshold_is_200(self) -> None:
-        """CompressionTrigger default threshold should be 200."""
+    def test_default_threshold_is_1000(self) -> None:
+        """CompressionTrigger default threshold should be 1000."""
         from blend.core.compression import CompressionTrigger
 
         trigger = CompressionTrigger()
-        assert trigger.threshold == 200
+        assert trigger.threshold == 1000
 
     def test_agent_mode_still_skips(self) -> None:
         """agent_mode=True should still skip regardless of threshold."""
         from blend.core.compression import CompressionTrigger
 
-        trigger = CompressionTrigger(threshold=200)
+        trigger = CompressionTrigger(threshold=1000)
         assert trigger.should_compress(10000, agent_mode=True) is False
 
 
@@ -51,8 +51,6 @@ class TestL1CompressionRemoved:
              patch("blend.core.orchestrator.Executor") as mock_exec_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel"), \
-             patch("blend.core.orchestrator.CompressionTrigger"), \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_v_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enf_cls:
 
@@ -67,7 +65,6 @@ class TestL1CompressionRemoved:
             mock_enf_cls.return_value.enforce.return_value = MagicMock(
                 allowed=True, violations=[],
             )
-            mock_l4_cls.return_value.should_compress.return_value = False
 
             from blend.core.orchestrator import BlendOrchestrator
             orchestrator = BlendOrchestrator()
@@ -82,8 +79,6 @@ class TestL1CompressionRemoved:
              patch("blend.core.orchestrator.Executor") as mock_exec_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel"), \
-             patch("blend.core.orchestrator.CompressionTrigger"), \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_v_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enf_cls:
 
@@ -99,7 +94,6 @@ class TestL1CompressionRemoved:
             mock_enf_cls.return_value.enforce.return_value = MagicMock(
                 allowed=True, violations=[],
             )
-            mock_l4_cls.return_value.should_compress.return_value = False
 
             from blend.core.orchestrator import BlendOrchestrator
             orchestrator = BlendOrchestrator()
@@ -115,8 +109,7 @@ class TestL1CompressionRemoved:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_cls, \
              patch("blend.core.orchestrator.Executor") as mock_exec_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
-             patch("blend.core.orchestrator.ResourceModel"), \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel"):
 
             mock_cls.return_value.score.return_value = MagicMock(
                 total=5, tier="MEDIUM", task_type="general",
@@ -137,8 +130,7 @@ class TestL1CompressionRemoved:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_cls, \
              patch("blend.core.orchestrator.Executor") as mock_exec_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
-             patch("blend.core.orchestrator.ResourceModel"), \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel"):
 
             mock_cls.return_value.score.return_value = MagicMock(
                 total=5, tier="MEDIUM", task_type="general",
@@ -211,8 +203,6 @@ def _mock_orchestrator_without_compress():
         Executor=MagicMock(),
         StrategyGenerator=MagicMock(),
         ResourceModel=MagicMock(),
-        CompressionTrigger=MagicMock(),
-        L4Compressor=MagicMock(),
         QualityVerifier=MagicMock(),
         Enforcer=MagicMock(),
     )

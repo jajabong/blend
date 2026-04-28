@@ -7,19 +7,19 @@ class TestCompressionTrigger:
     """Test compression triggering logic."""
 
     def test_trigger_above_threshold(self) -> None:
-        """Should trigger when tokens > 200."""
+        """Should trigger when tokens > 1000."""
         trigger = CompressionTrigger()
-        assert trigger.should_compress(201) is True
+        assert trigger.should_compress(1001) is True
 
     def test_no_trigger_at_threshold(self) -> None:
-        """Should not trigger at exactly 200 tokens."""
+        """Should not trigger at exactly 1000 tokens."""
         trigger = CompressionTrigger()
-        assert trigger.should_compress(200) is False
+        assert trigger.should_compress(1000) is False
 
     def test_no_trigger_below_threshold(self) -> None:
-        """Should not trigger when tokens < 200."""
+        """Should not trigger when tokens < 1000."""
         trigger = CompressionTrigger()
-        assert trigger.should_compress(150) is False
+        assert trigger.should_compress(500) is False
 
     def test_threshold_configurable(self) -> None:
         """Threshold should be configurable."""

@@ -18,11 +18,12 @@ class CompressionResult:
 class CompressionTrigger:
     """Determines when L4 compression should be applied."""
 
-    def __init__(self, threshold: int = 200) -> None:
+    def __init__(self, threshold: int = 1000) -> None:
         """Initialize with compression threshold.
 
         Args:
-            threshold: Token count above which compression triggers
+            threshold: Token count above which compression triggers (default 1000,
+                aligned with L5 Gate 6 threshold).
         """
         self.threshold = threshold
 

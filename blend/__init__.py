@@ -11,6 +11,6 @@ from dotenv import load_dotenv
 _project_root = Path(__file__).parent.parent
 load_dotenv(_project_root / ".env")
 
-__version__ = "1.6.0"
+__version__ = "2.1.0"
 __author__ = "Blend Team"
 __description__ = "极致成本效率商用 API"

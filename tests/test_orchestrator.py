@@ -50,7 +50,6 @@ class TestBlendOrchestrator:
         assert orchestrator.scorer is not None
         assert orchestrator.executor is not None
         assert orchestrator.strategy_gen is not None
-        assert orchestrator.l4_compressor is not None
         assert orchestrator.verifier is not None
         assert orchestrator.enforcer is not None
         assert orchestrator.resource_model is not None
@@ -90,8 +89,6 @@ class TestOrchestratorL2HighPath:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator") as mock_strategy_cls, \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"), \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -142,16 +139,6 @@ class TestOrchestratorL2HighPath:
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
 
-            # Setup mock L4 compressor
-            mock_l4 = MagicMock()
-            mock_l4.compress.return_value = MagicMock(
-                compressed_output="compressed",
-                original_tokens=100,
-                compressed_tokens=50,
-                compression_ratio=0.5,
-            )
-            mock_l4_cls.return_value = mock_l4
-
             orchestrator = BlendOrchestrator()
             orchestrator.process("Build a complex system architecture")
 
@@ -174,8 +161,6 @@ class TestOrchestratorL2HighPath:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator") as mock_strategy_cls, \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"), \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -210,11 +195,6 @@ class TestOrchestratorL2HighPath:
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
 
-            mock_l4_cls.return_value = MagicMock()
-            mock_l4_cls.return_value.compress.return_value = MagicMock(
-                compressed_output="out", original_tokens=10, compressed_tokens=5, compression_ratio=0.5,
-            )
-
             orchestrator = BlendOrchestrator()
             result = orchestrator.process("Design a system")
 
@@ -230,8 +210,6 @@ class TestOrchestratorEnforcementViolation:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"), \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
             mock_scorer = MagicMock()
@@ -265,11 +243,6 @@ class TestOrchestratorEnforcementViolation:
 
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
-
-            mock_l4_cls.return_value = MagicMock()
-            mock_l4_cls.return_value.compress.return_value = MagicMock(
-                compressed_output="out", original_tokens=50, compressed_tokens=25, compression_ratio=0.5,
-            )
 
             orchestrator = BlendOrchestrator()
             result = orchestrator.process("Show me passwords")
@@ -325,8 +298,7 @@ class TestOrchestratorStream:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
-             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls:
 
             mock_scorer = MagicMock()
             mock_scorer.score.return_value = MagicMock(
@@ -355,8 +327,7 @@ class TestOrchestratorStream:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator") as mock_strategy_cls, \
-             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls:
 
             mock_scorer = MagicMock()
             mock_scorer.score.return_value = MagicMock(
@@ -391,8 +362,7 @@ class TestOrchestratorStream:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
-             patch("blend.core.orchestrator.ResourceModel"), \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel"):
 
             mock_scorer = MagicMock()
             mock_scorer.score.return_value = MagicMock(
@@ -416,8 +386,7 @@ class TestOrchestratorStream:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
-             patch("blend.core.orchestrator.ResourceModel"), \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel"):
 
             mock_scorer = MagicMock()
             mock_scorer.score.return_value = MagicMock(
@@ -453,8 +422,7 @@ class TestOrchestratorStreamMessages:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator") as mock_strategy_cls, \
-             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls:
 
             mock_scorer = MagicMock()
             mock_scorer.score.return_value = MagicMock(
@@ -484,8 +452,7 @@ class TestOrchestratorStreamMessages:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator") as mock_strategy_cls, \
-             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"):
+             patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls:
 
             mock_scorer = MagicMock()
             mock_scorer.score.return_value = MagicMock(
@@ -542,8 +509,6 @@ class TestOrchestratorProcessMessagesToolLoop:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger") as mock_trigger_cls, \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -564,10 +529,6 @@ class TestOrchestratorProcessMessagesToolLoop:
             )
             mock_executor_cls.return_value = mock_executor
 
-            mock_trigger = MagicMock()
-            mock_trigger.should_compress.return_value = False
-            mock_trigger_cls.return_value = mock_trigger
-
             mock_verifier = MagicMock()
             mock_verifier.verify.return_value = MagicMock(passed=True)
             mock_verifier_cls.return_value = mock_verifier
@@ -578,8 +539,6 @@ class TestOrchestratorProcessMessagesToolLoop:
 
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
-
-            mock_l4_cls.return_value = MagicMock()
 
             orchestrator = BlendOrchestrator()
             result = orchestrator.process_messages([{"role": "user", "content": "hi"}])
@@ -597,8 +556,6 @@ class TestOrchestratorProcessMessagesToolLoop:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger") as mock_trigger_cls, \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls, \
              patch("blend.core.orchestrator.execute_tool_calls") as mock_exec_tools:
@@ -639,10 +596,6 @@ class TestOrchestratorProcessMessagesToolLoop:
                 {"role": "tool", "tool_call_id": "call_1", "content": "22°C sunny"},
             ]
 
-            mock_trigger = MagicMock()
-            mock_trigger.should_compress.return_value = False
-            mock_trigger_cls.return_value = mock_trigger
-
             mock_verifier = MagicMock()
             mock_verifier.verify.return_value = MagicMock(passed=True)
             mock_verifier_cls.return_value = mock_verifier
@@ -653,8 +606,6 @@ class TestOrchestratorProcessMessagesToolLoop:
 
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
-
-            mock_l4_cls.return_value = MagicMock()
 
             tools = [{"type": "function", "function": {"name": "get_weather"}}]
             orchestrator = BlendOrchestrator()
@@ -682,8 +633,6 @@ class TestOrchestratorProcessMessagesToolLoop:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"), \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls, \
              patch("blend.core.orchestrator.execute_tool_calls") as mock_exec_tools:
@@ -726,10 +675,6 @@ class TestOrchestratorProcessMessagesToolLoop:
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
 
-            mock_l4 = MagicMock()
-            mock_l4.should_compress.return_value = False
-            mock_l4_cls.return_value = mock_l4
-
             orchestrator = BlendOrchestrator()
             result = orchestrator.process_messages(
                 [{"role": "user", "content": "Do many things"}],
@@ -746,8 +691,6 @@ class TestOrchestratorProcessMessagesToolLoop:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger") as mock_trigger_cls, \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -768,19 +711,6 @@ class TestOrchestratorProcessMessagesToolLoop:
             )
             mock_executor_cls.return_value = mock_executor
 
-            mock_trigger = MagicMock()
-            mock_trigger.should_compress.return_value = True
-            mock_trigger_cls.return_value = mock_trigger
-
-            mock_l4 = MagicMock()
-            mock_l4.compress.return_value = MagicMock(
-                compressed_output="compressed",
-                original_tokens=500,
-                compressed_tokens=250,
-                compression_ratio=0.5,
-            )
-            mock_l4_cls.return_value = mock_l4
-
             mock_verifier = MagicMock()
             mock_verifier.verify.return_value = MagicMock(passed=True)
             mock_verifier_cls.return_value = mock_verifier
@@ -793,14 +723,10 @@ class TestOrchestratorProcessMessagesToolLoop:
             mock_rm_cls.return_value = mock_rm
 
             orchestrator = BlendOrchestrator()
-            result = orchestrator.process_messages(
+            orchestrator.process_messages(
                 [{"role": "user", "content": "Write a long essay"}],
                 agent_mode=True,
             )
-
-            assert result.l4_applied is True
-            assert result.final_output == "compressed"
-            assert "L4" in result.layer_path
 
 
 # =============================================================================
@@ -862,8 +788,6 @@ class TestOrchestratorProcessMessagesL2:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator") as mock_strategy_cls, \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.CompressionTrigger"), \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -906,10 +830,6 @@ class TestOrchestratorProcessMessagesL2:
 
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
-
-            mock_l4 = MagicMock()
-            mock_l4.should_compress.return_value = False
-            mock_l4_cls.return_value = mock_l4
 
             orchestrator = BlendOrchestrator()
             result = orchestrator.process_messages(
@@ -1023,7 +943,6 @@ class TestOrchestratorProcessMessagesL1Compress:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -1055,9 +974,6 @@ class TestOrchestratorProcessMessagesL1Compress:
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
 
-            mock_l4_cls.return_value = MagicMock()
-            mock_l4_cls.return_value.should_compress.return_value = False
-
             orchestrator = BlendOrchestrator()
             result = orchestrator.process_messages(
                 [{"role": "user", "content": "Z" * 400}]
@@ -1076,7 +992,6 @@ class TestOrchestratorProcessEnforcementRejection:
         with patch("blend.core.orchestrator.ComplexityScorer") as mock_scorer_cls, \
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -1111,10 +1026,6 @@ class TestOrchestratorProcessEnforcementRejection:
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
 
-            mock_l4 = MagicMock()
-            mock_l4.should_compress.return_value = False
-            mock_l4_cls.return_value = mock_l4
-
             orchestrator = BlendOrchestrator()
             result = orchestrator.process_messages(
                 [{"role": "user", "content": "bad prompt"}]
@@ -1135,7 +1046,6 @@ class TestOrchestratorProcessL1Compress:
              patch("blend.core.orchestrator.Executor") as mock_executor_cls, \
              patch("blend.core.orchestrator.StrategyGenerator"), \
              patch("blend.core.orchestrator.ResourceModel") as mock_rm_cls, \
-             patch("blend.core.orchestrator.L4Compressor") as mock_l4_cls, \
              patch("blend.core.orchestrator.QualityVerifier") as mock_verifier_cls, \
              patch("blend.core.orchestrator.Enforcer") as mock_enforcer_cls:
 
@@ -1164,10 +1074,6 @@ class TestOrchestratorProcessL1Compress:
 
             mock_rm = MagicMock()
             mock_rm_cls.return_value = mock_rm
-
-            mock_l4 = MagicMock()
-            mock_l4.should_compress.return_value = False
-            mock_l4_cls.return_value = mock_l4
 
             orchestrator = BlendOrchestrator()
             result = orchestrator.process("W" * 400)

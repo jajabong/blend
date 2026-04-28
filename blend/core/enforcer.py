@@ -1,7 +1,12 @@
 """Enforcement Mechanism - 8 Taboos Auto-Rejection."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:
+    from enum import Enum
+    class StrEnum(str, Enum):
+        """StrEnum fallback for Python < 3.11."""
 
 
 class TabooType(StrEnum):

@@ -1,7 +1,7 @@
 # Blend — SPEC.md 开发规范单文件
 
-> **Version:** 2.0.0
-> **Status:** DONE — 24/24 stories (v2.0.0)
+> **Version:** 2.1.0
+> **Status:** ACTIVE — 27/27 stories (v2.1.0)
 > **Last Updated:** 2026-04-27
 
 ---
@@ -37,7 +37,7 @@
 
 ## 故事清单
 
-### 已完成（v1.3.0）
+### 已完成（v2.1.0）
 
 - [x] **Story 1:** 项目脚手架 @ 2026-04-24
 - [x] **Story 2:** L1 入口层 @ 2026-04-24
@@ -63,6 +63,9 @@
 - [x] **Story 22:** Phase 2: Three-tier Executor (Tier1→Haiku, Tier2→Haiku/Sonnet, Tier3→Sonnet) @ 2026-04-27
 - [x] **Story 23:** Phase 3: Opus Advisor Loop — model_hint driven by Opus reasoning @ 2026-04-27
 - [x] **Story 24:** Phase 4: L5 Gemini Quality Gate (HIGH complexity) @ 2026-04-27
+- [x] **Story 25:** 版本号统一（__init__.py + api.py → 2.0.0）@ 2026-04-27
+- [x] **Story 26:** 阈值配置统一（executor._get_budget → ResourceModel）@ 2026-04-27
+- [x] **Story 27:** mypy 类型修复（verifier + circuit_breaker）@ 2026-04-27
 
 ### 进行中（v2.0.0）
 
@@ -74,8 +77,8 @@
 
 | 指标 | 值 |
 |------|-----|
-| 总故事数 | 24 |
-| 已完成 | 24 |
+| 总故事数 | 27 |
+| 已完成 | 27 |
 | 进行中 | 0 |
 | 待开始 | 0 |
 | 完成率 | 100% |

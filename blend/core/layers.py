@@ -1,7 +1,12 @@
 """Five-layer architecture for blend."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:
+    from enum import Enum
+    class StrEnum(str, Enum):
+        """StrEnum fallback for Python < 3.11."""
 
 
 class Layer(StrEnum):

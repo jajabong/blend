@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from blend.core.budget import ResourceModel
-from blend.core.compression import CompressionTrigger, L4Compressor
 from blend.core.enforcer import Enforcer
 from blend.core.executor import Executor
-from blend.core.layers import L1Output, L2Output, L4Output
+from blend.core.layers import L1Output, L2Output
 from blend.core.strategy import StrategyGenerator
 from blend.core.tool_executor import execute_tool_calls
 from blend.core.verifier import QualityVerifier
@@ -31,7 +30,7 @@ class OrchestratorResult:
     tokens_used: int
     quality_gate_passed: bool
     l1_compressed: bool
-    l4_applied: bool
+    l4_applied: bool = False  # Deprecated: L4 removed, always False
     finish_reason: str = "stop"
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_count: int = 0
@@ -46,8 +45,6 @@ class BlendOrchestrator:
         self.scorer = ComplexityScorer()
         self.executor = Executor()
         self.strategy_gen = StrategyGenerator()
-        self.l4_compressor = L4Compressor()
-        self.compression_trigger = CompressionTrigger()
         self.verifier = QualityVerifier()
         self.enforcer = Enforcer()
         self.resource_model = ResourceModel()
@@ -165,26 +162,31 @@ class BlendOrchestrator:
         # l3_output is guaranteed non-None after loop
         assert l3_output is not None
 
-        # L4
-        l4_output: L4Output | None = None
-        l4_applied = False
-        if self.compression_trigger.should_compress(l3_output.tokens_used, agent_mode=agent_mode):
-            layer_path_parts.append("L4")
-            l4_applied = True
-            l4_result = self.l4_compressor.compress(
-                text=l3_output.content,
-                original_tokens=l3_output.tokens_used,
-            )
-            l4_output = L4Output(
-                compressed_output=l4_result.compressed_output,
-                original_tokens=l4_result.original_tokens,
-                compressed_tokens=l4_result.compressed_tokens,
-                compression_ratio=l4_result.compression_ratio,
-            )
-
-        # L5
+        # L5 — L4 removed (compression negative ROI: +18s latency for $0.003 savings)
         layer_path_parts.append("L5")
-        final_output = l4_output.compressed_output if l4_output else l3_output.content
+        # If tools were executed and we exited the loop due to hitting max iterations
+        # (finish_reason="tool_calls"), make a final L3 call so the model can synthesize
+        # a response based on tool results. If finish_reason="stop", we already have
+        # the final response and don't need an extra call.
+        if total_tool_calls > 0 and l3_output.finish_reason == "tool_calls":
+            final_l3 = self.executor.execute_messages(
+                messages=current_messages,
+                complexity=complexity,
+                strategy={"plan": l2_output.plan} if l2_output else None,
+                task_type=task_type,
+                tools=None,  # No more tools needed
+                tool_choice=None,
+                response_format=None,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+                stop=stop,
+            )
+            final_output = final_l3.content if final_l3.content else l3_output.content
+        else:
+            final_output = l3_output.content
         quality_level = tier
 
         verification = self.verifier.verify(
@@ -192,7 +194,7 @@ class BlendOrchestrator:
             quality_level=quality_level,
             layer_path=">".join(layer_path_parts),
             output_tokens=len(final_output) // 4,
-            l4_applied=l4_applied,
+            l4_applied=False,
             task_type=task_type,
             skip_p0_check=agent_mode,
         )
@@ -202,7 +204,7 @@ class BlendOrchestrator:
             layer_path=">".join(layer_path_parts),
             complexity=complexity,
             output_tokens=len(final_output) // 4,
-            l4_applied=l4_applied,
+            l4_applied=False,
             model_used=l3_output.model_used,
         )
 
@@ -223,7 +225,7 @@ class BlendOrchestrator:
             tokens_used=l3_output.tokens_used,
             quality_gate_passed=quality_gate_passed,
             l1_compressed=l1_compressed,
-            l4_applied=l4_applied,
+            l4_applied=False,
             finish_reason=l3_output.finish_reason,
             tool_calls=l3_output.tool_calls,
             tool_call_count=total_tool_calls,
@@ -405,30 +407,10 @@ class BlendOrchestrator:
         # Track usage
         self.resource_model.track_consumption(l3_output.model_used, l3_output.tokens_used)
 
-        # ============ L4: Compression Layer ============
-        l4_output: L4Output | None = None
-        l4_applied = False
-
-        if self.compression_trigger.should_compress(l3_output.tokens_used):
-            layer_path_parts.append("L4")
-            l4_applied = True
-
-            l4_result = self.l4_compressor.compress(
-                text=l3_output.raw_output,
-                original_tokens=l3_output.tokens_used,
-            )
-
-            l4_output = L4Output(
-                compressed_output=l4_result.compressed_output,
-                original_tokens=l4_result.original_tokens,
-                compressed_tokens=l4_result.compressed_tokens,
-                compression_ratio=l4_result.compression_ratio,
-            )
-
         # ============ L5: Verification Layer ============
         layer_path_parts.append("L5")
 
-        final_output = l4_output.compressed_output if l4_output else l3_output.raw_output
+        final_output = l3_output.raw_output
 
         # Determine quality level for gate selection
         quality_level = tier  # LOW | MEDIUM | HIGH
@@ -439,7 +421,7 @@ class BlendOrchestrator:
             quality_level=quality_level,
             layer_path=">".join(layer_path_parts),
             output_tokens=len(final_output) // 4,
-            l4_applied=l4_applied,
+            l4_applied=False,
             task_type=task_type,
         )
 
@@ -449,7 +431,7 @@ class BlendOrchestrator:
             layer_path=">".join(layer_path_parts),
             complexity=complexity,
             output_tokens=len(final_output) // 4,
-            l4_applied=l4_applied,
+            l4_applied=False,
             model_used=l3_output.model_used,
         )
 
@@ -471,7 +453,7 @@ class BlendOrchestrator:
             tokens_used=l3_output.tokens_used,
             quality_gate_passed=quality_gate_passed,
             l1_compressed=l1_compressed,
-            l4_applied=l4_applied,
+            l4_applied=False,
         )
 
     def stream(self, prompt: str) -> Generator[dict[str, Any], None, None]:

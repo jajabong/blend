@@ -1,7 +1,12 @@
 """L1 Complexity Scorer - Scores prompt complexity from 1-10."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:
+    from enum import Enum
+    class StrEnum(str, Enum):
+        """StrEnum fallback for Python < 3.11."""
 
 
 class ComplexityTier(StrEnum):

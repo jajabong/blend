@@ -109,7 +109,13 @@ class CircuitBreakerRegistry:
         """Get or create a circuit breaker for the named provider."""
         with self._lock:
             if name not in self._breakers:
-                self._breakers[name] = CircuitBreaker(name=name, **kwargs)
+                failure_threshold = kwargs.get("failure_threshold", 5)
+                recovery_timeout = kwargs.get("recovery_timeout", 30.0)
+                self._breakers[name] = CircuitBreaker(
+                    name=name,
+                    failure_threshold=int(failure_threshold),  # type: ignore[arg-type]
+                    recovery_timeout=float(recovery_timeout),  # type: ignore[arg-type]
+                )
             return self._breakers[name]
 
     def reset(self, name: str) -> None:

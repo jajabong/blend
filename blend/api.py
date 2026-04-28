@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Blend API",
     description="极致成本效率商用 API - 自动智能路由",
-    version="1.6.0",
+    version="2.1.0",
     lifespan=lifespan,  # type: ignore[arg-type]  # lifespan type-stub mismatch with contextlib
 )
 
@@ -425,38 +425,62 @@ async def _stream_async(
 ) -> AsyncGenerator[str, None]:
     """Async wrapper — runs sync stream in a thread to avoid blocking the event loop.
 
-    Provider retry loops use time.sleep() which would block FastAPI's event loop
-    if called directly in an async context.
+    Uses an asyncio.Queue to yield chunks in real-time as they arrive from the
+    sync generator, rather than buffering the entire stream before sending the
+    first byte. This prevents "Connection reset by server" when the tool execution
+    loop takes time before producing output.
     """
     import json as json_mod
 
-    def sync_yield_all() -> list[str]:
-        results: list[str] = []
-        for chunk in orchestrator.stream_messages(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            response_format=response_format,
-            agent_mode=agent_mode,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            stop=stop,
-        ):
-            chunk_id = f"chatcmpl-{int(time.time() * 1000)}"
-            payload = {
-                "id": chunk.get("id", chunk_id),
-                "choices": chunk.get("choices", []),
-            }
-            results.append(f"data: {json_mod.dumps(payload)}\n\n")
-        results.append("data: [DONE]\n\n")
-        return results
+    queue: asyncio.Queue[tuple[bool, str | BaseException]] = asyncio.Queue()
+    chunk_id_str = f"chatcmpl-{int(time.time() * 1000)}"
+    exc_info: BaseException | None = None
 
-    chunks = await asyncio.to_thread(sync_yield_all)
-    for chunk in chunks:
-        yield chunk
+    def sync_producer() -> None:
+        """Runs in a thread pool — produces chunks into the async queue."""
+        nonlocal exc_info
+        try:
+            for chunk in orchestrator.stream_messages(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                agent_mode=agent_mode,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+                stop=stop,
+            ):
+                payload = {
+                    "id": chunk.get("id", chunk_id_str),
+                    "choices": chunk.get("choices", []),
+                }
+                queue.put_nowait((False, f"data: {json_mod.dumps(payload)}\n\n"))
+            queue.put_nowait((False, "data: [DONE]\n\n"))
+        except BaseException as e:
+            exc_info = e
+            queue.put_nowait((True, e))
+
+    # Schedule sync producer in thread pool WITHOUT awaiting it
+    # run_in_executor returns a Future immediately; the producer runs concurrently
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, sync_producer)
+
+    # Consume chunks in real-time as they arrive
+    while True:
+        if exc_info is not None:
+            raise exc_info
+        try:
+            is_exc, value = await asyncio.wait_for(queue.get(), timeout=60.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Stream timeout — no chunk received in 60s") from None
+        if is_exc:
+            raise value
+        yield value  # type: ignore[misc]
+        if value == "data: [DONE]\n\n":
+            break
 
 
 @app.get("/v1/models")
