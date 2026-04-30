@@ -95,7 +95,7 @@ class AnthropicMessageRequest(BaseModel):
     max_tokens: int
     messages: list[dict[str, Any]]
     stream: bool = False
-    system: str | None = None
+    system: str | list[dict[str, Any]] | None = None
     tools: list[dict[str, Any]] | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -531,7 +531,7 @@ async def get_info() -> dict[str, Any]:
 
 def _build_messages_from_anthropic(
     messages: list[dict[str, Any]],
-    system: str | None,
+    system: str | list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
     """Convert Anthropic message format to blend internal format.
 
@@ -541,7 +541,17 @@ def _build_messages_from_anthropic(
     result: list[dict[str, Any]] = []
 
     if system:
-        result.append({"role": "system", "content": system})
+        if isinstance(system, list):
+            # Join multiple text blocks if it's a list
+            system_text = ""
+            for block in system:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    system_text += block.get("text", "") + "\n"
+                elif isinstance(block, str):
+                    system_text += block + "\n"
+            result.append({"role": "system", "content": system_text.strip()})
+        else:
+            result.append({"role": "system", "content": system})
 
     for m in messages:
         role = m.get("role", "user")
@@ -567,9 +577,17 @@ def _convert_chunk_to_anthropic_events(
     import json
 
     chunk_id = chunk.get("id", "msg_anthropic")
-    # Correctly extract from top-level keys as returned by orchestrator.stream_messages
-    delta = chunk.get("delta", {})
-    finish_reason = chunk.get("finish_reason")
+    # Support both formats:
+    # 1. Top-level keys (orchestrator.stream_messages): {"delta": {}, "finish_reason": ...}
+    # 2. OpenAI choices format: {"choices": [{"delta": {}, "finish_reason": ...}]}
+    if "choices" in chunk:
+        choices = chunk.get("choices", [])
+        choice = choices[0] if choices else {}
+        delta = choice.get("delta", {})
+        finish_reason = choice.get("finish_reason")
+    else:
+        delta = chunk.get("delta", {})
+        finish_reason = chunk.get("finish_reason")
 
     mapping = {
         "stop": "end_turn",
