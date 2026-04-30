@@ -1,4 +1,4 @@
-"""Blend Orchestrator - Coordinates the 5-Layer Pipeline with Draft-Refine logic."""
+"""Blend Orchestrator - Coordinates the 4-Layer Pipeline with Draft-Refine logic."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ class BlendOrchestrator:
         return "\n".join(parts)
 
     def process(self, prompt: str) -> OrchestratorResult:
-        """Process a single prompt through the 5-layer pipeline."""
+        """Process a single prompt through the 4-layer pipeline."""
         print(f"DEBUG: process called with: {prompt}")
         layer_path_parts = ["L1"]
         # 1. L1: Score complexity

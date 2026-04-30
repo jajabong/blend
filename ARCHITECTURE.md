@@ -19,18 +19,19 @@
 
 **答：** 商用场景需要可预测性：
 - 固定架构 → 成本可预测 → 可向用户承诺 SLA
+- 架构组成：L1 (评分+压缩) → L2 (策略) → L3 (执行) → L5 (质检/自愈)
 - 改进：L2 触发门槛下调至 5+（原 6+），让更多中高难度任务获得 Opus 策略指导。
 - 改进：新增"Scale 维度"评分，识别亿级/全球等超大规模需求并自动升阶。
 
-**原因：** blend 的核心价值是"固定成本 + 可承诺质量"。通过下调策略层门槛和增加规模感知，在极小成本增量下换取了大幅质量提升。
+**原因：** blend 的核心价值是"固定成本 + 可承诺质量"。L4 层（二次压缩）因 ROI 为负（+18s 延迟仅节省 /bin/bash.003）已被移除，目前精简为更高效的四层结构。
 
-## 3. Minimax 作为 L1+L4 决策
+## 3. Minimax 作为 L1 核心决策
 
-**问：** 为什么 L1 和 L4 都用 Minimax？
+**问：** 为什么 L1 用 Minimax？
 
 **答：** 成本结构最优：
-- L1 需要"理解 + 压缩" → Minimax 语义压缩能力强，成本极低
-- L4 需要"压缩 >500T 输出" → 再次用 Minimax 成本最低
+- L1 需要"理解 + 评分" → Minimax 语义理解能力强，成本极低
+- Minimax 在高复杂度任务（≥4）中还负责生成“初始草稿 (DRAFT)”。
 
 **原因：** Minimax 20 CNY/月无限 Token，是 blend 成本控制的核心杠杆。
 
@@ -67,8 +68,6 @@
 - **并行赛跑 (Racing Fallback)：** 同时启动 Primary 和 Fallback。若 Primary 3秒无响应，Fallback 立即进场竞争。谁快用谁，用户感知延迟降至秒级。
 - **指数退避：** 对故障 Provider 实施动态锁定（60s -> 1h -> 24h），区分技术抖动与行政欠费。
 
----
-
 ## 14. "榨干" Minimax 与草稿-精修架构 (v2.3.0)
 
 **问：** 既然 Minimax 几乎免费，如何最大化其价值？
@@ -77,8 +76,6 @@
 - **L1 预处理：** Minimax 不再只评分，而是为所有复杂度 ≥ 4 的任务先写一份"免费草稿 (DRAFT)"。
 - **L3 精修：** 精英模型 (Sonnet/Gemini) 拿到草稿后进行"Review and Finalize"。
 - **收益：** 减少了昂贵模型的思考发散性，大幅降低了按量计费 (Baosi) 的 Token 消耗，同时通过"免费脑力"提升了长文稳定性。
-
----
 
 ## 15. 自愈重试与"慈悲门禁" (Mercy Gate)
 
@@ -89,8 +86,6 @@
 - **慈悲交付 (Mercy Gate)：** 若重试后仍有轻微瑕疵，只要不涉及 P0 安全漏洞，系统会带上 `# --- QUALITY WARNING ---` 强行交付结果。
 - **原则：** 拒绝垃圾代码，但绝不让用户空手而归。
 
----
-
 ## 16. 统筹精算路由决策
 
 **问：** 面对按量计费 (Baosi) 和按次计费 (Lemon)，如何选？
@@ -99,100 +94,6 @@
 - **短平快任务：** 路由至 Baosi (Sonnet)。由于 Token 少，按量计费比按次更省。
 - **长篇大论任务：** 路由至 Lemon (Gemini)。按次计费（10.5 额度）输出万字长文的 ROI 最高。
 - **所有评分/草稿：** 强制 Minimax。
-
----
-
-## 17. Claude Code 商用级接入 (v2.3.1)
-
-**问：** Blend 如何实现作为 Claude Code 后端的商用级兼容性？
-
-**答：** 通过"伪装握手 + 协议兼容"实现无缝接入：
-
-### 17.1 模型名称伪装
-
-Claude Code 启动时验证 `/v1/models` 端点。Blend 返回：
-```json
-{"id": "claude-3-5-sonnet-20241022", "object": "model", ...}
-```
-实际执行时自动映射到真实策略（Haiku/Sonnet/Gemini），用户无感知。
-
-### 17.2 SSE 流式协议兼容
-
-Blend 的 `/v1/messages` 端点输出符合 Anthropic SDK 规范的 SSE 事件：
-```
-event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"..."}}
-
-event: message_stop
-data: {"type":"message_stop","message":{"id":"...","type":"message",...}}
-```
-
-### 17.3 Claude Code 工具调用支持
-
-Blend 输出的 `[TOOL_CALL]` 块格式：
-```json
-{"tool": "read_file", "args": {"path": "blend/core/budget.py"}}
-```
-Claude Code 收到后自动执行并反馈结果，实现自主文件操作循环。
-
-### 17.4 接入配置
-
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:8000/v1
-export ANTHROPIC_API_KEY=blend-commercial-token
-```
-
----
-
-## 18. OpenCode + Blend 集成 (v2.3.1)
-
-**问：** OpenCode 如何正确接入 Blend？
-
-**答：** OpenCode 1.14.20 已验证支持 Blend：
-
-| 配置项 | 值 | 说明 |
-|--------|-----|------|
-| OpenCode config | `primary: "blend/blend"` | 已配置 |
-| `ANTHROPIC_BASE_URL` | `http://localhost:8000/v1` | 核心修复 |
-| `ANTHROPIC_API_KEY` | `blend-commercial-token` | 非空即可 |
-| `BLEND_LOG_LEVEL` | `DEBUG` | 商用初期监控 |
-
-### 18.1 OpenCode TUI 使用
-
-```bash
-# 终端 1: 启动 Blend
-python3 -m uvicorn blend.api:app --host 0.0.0.0 --port 8000
-
-# 终端 2: 启动 OpenCode
-source ~/.zshrc  # 加载环境变量
-opencode
-```
-
-### 18.2 CLI 快捷命令
-
-```bash
-# ~/.zshrc 中已配置
-alias claude-mini='...'    # MiniMax M2.7
-alias claude-baosi='...'    # Baosi Claude 3.5
-alias claude-blend='...'    # Blend 商用优化
-alias claude="claude-mini"  # 默认指向 MiniMax
-```
-
-### 18.3 性能基准
-
-| 指标 | 实测值 |
-|------|--------|
-| 握手延迟 | < 100ms |
-| 低复杂度任务 (L1>L3>L5) | ~3s |
-| 高复杂度任务 (含 L2 策略) | ~60s |
-| 流式输出稳定性 | 60s+不断连 |
-| 代码生成质量 | 18,000+ 字符/次 |
-
----
-
-**结论：** Blend 已完全具备作为 Claude Code / OpenCode 后端的商用级兼容性。通过 Minimax 草稿 + 精英模型精修的架构，成本比直连 Baosi 低 70%+，同时保持 Claude Code 级别的工程质量。
-
----
 
 ## 17. Claude Code 商用接入与协议伪装决策 (v2.4.0)
 
@@ -214,4 +115,4 @@ alias claude="claude-mini"  # 默认指向 MiniMax
      - 请求 `opus` -> 强力引导至 **L5 深度质检 + 强制反馈循环**（追求极致质量）。
      - 请求 `haiku` -> 开启 **极速压榨模式**（关闭部分 L5 检查以换取秒回体验）。
 
-**原因：** Blend 的定位是"智能协议转换器"。通过在接口层伪装成 Anthropic，在执行层解构为 5 层自愈流水线，实现了**"原生客户端的体验 + Blend 的成本控制"**。这证明了 Blend 架构对商用复杂工程工具（如 Claude Code）的深度支撑能力。
+**原因：** Blend 的定位是"智能协议转换器"。通过在接口层伪装成 Anthropic，在执行层解构为高效的 4 层自愈流水线，实现了**"原生客户端的体验 + Blend 的成本控制"**。

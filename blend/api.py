@@ -158,7 +158,7 @@ class ChatCompletionRequest(BaseModel):
 
 
 def process_through_layers(prompt: str) -> tuple[str, dict[str, Any]]:
-    """Process prompt through blend 5-layer pipeline.
+    """Process prompt through blend 4-layer pipeline.
 
     Args:
         prompt: User's prompt

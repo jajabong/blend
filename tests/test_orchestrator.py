@@ -1,4 +1,4 @@
-"""Tests for Blend Orchestrator - 5-Layer Pipeline."""
+"""Tests for Blend Orchestrator - 4-Layer Pipeline."""
 
 import os
 from unittest.mock import MagicMock, patch
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(not require_api_keys(), reason="API keys not set
 
 
 class TestBlendOrchestrator:
-    """Test the full 5-layer orchestrator."""
+    """Test the full 4-layer orchestrator."""
 
     def test_orchestrator_result_structure(self) -> None:
         """OrchestratorResult should have all required fields."""
