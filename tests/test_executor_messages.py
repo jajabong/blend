@@ -124,27 +124,35 @@ class TestExecuteMessages:
         assert call_kwargs.get("stop") == ["END"]
 
     def test_execute_messages_fallback_on_exception(self) -> None:
-        """execute_messages falls back to haiku when sonnet fails."""
+        """execute_messages falls back when primary fails."""
+        from blend.core.executor import ModelSelection
+
         executor = Executor()
         executor.resource_model = MagicMock()
         executor.resource_model.get_remaining.return_value = 10000
 
-        mock_sonnet = MagicMock()
-        mock_sonnet.chat.side_effect = Exception("Sonnet down")
+        mock_primary = MagicMock()
+        mock_primary.chat.side_effect = Exception("Primary down")
 
-        mock_haiku = MagicMock()
+        mock_fallback = MagicMock()
         mock_response = MagicMock()
         mock_response.content = "Fallback result"
         mock_response.finish_reason = "stop"
         mock_response.tool_calls = None
-        mock_haiku.chat.return_value = mock_response
+        mock_fallback.chat.return_value = mock_response
 
         def provider_side_effect(key: str):
             if key == "sonnet":
-                return mock_sonnet, "sonnet"
-            return mock_haiku, "haiku"
+                return mock_primary, "sonnet"
+            elif key == "haiku":
+                return mock_fallback, "haiku"
+            return MagicMock(), key
 
-        with patch("blend.core.executor._get_provider", side_effect=provider_side_effect):
+        def mock_select_model(self, complexity, task_type):
+            return ModelSelection(primary="sonnet", fallback=["haiku"])
+
+        with patch("blend.core.executor._get_provider", side_effect=provider_side_effect), \
+             patch.object(Executor, "_select_model", mock_select_model):
             result = executor.execute_messages(
                 messages=[{"role": "user", "content": "Test"}],
                 complexity=5,

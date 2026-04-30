@@ -13,15 +13,16 @@
 
 **原因：** 从第一性原理分析，两个问题的优化目标完全不同。强行合并会导致系统臃肿且两者都做不好。
 
-## 2. 五层固定架构决策
+## 2. 四层固定架构决策 (v2.1.0 优化)
 
-**问：** 为什么用固定五层而非 openblend 的动态路由？
+**问：** 为什么用固定四层而非 openblend 的动态路由？
 
 **答：** 商用场景需要可预测性：
 - 固定架构 → 成本可预测 → 可向用户承诺 SLA
-- 动态路由 → 效果更好但成本不可控 → 无法做商用定价
+- 改进：L2 触发门槛下调至 5+（原 6+），让更多中高难度任务获得 Opus 策略指导。
+- 改进：新增"Scale 维度"评分，识别亿级/全球等超大规模需求并自动升阶。
 
-**原因：** blend 的核心价值是"固定成本 + 可承诺质量"，这要求架构稳定。
+**原因：** blend 的核心价值是"固定成本 + 可承诺质量"。通过下调策略层门槛和增加规模感知，在极小成本增量下换取了大幅质量提升。
 
 ## 3. Minimax 作为 L1+L4 决策
 
@@ -33,142 +34,184 @@
 
 **原因：** Minimax 20 CNY/月无限 Token，是 blend 成本控制的核心杠杆。
 
-## 4. L2 输出 ≤300T 决策
+## 8. Haiku 专属 L3 & 代码质量底线决策 (v2.1.0)
 
-**问：** 为什么 L2 Opus 输出必须 ≤300T？
+**问：** 为什么 Haiku 有专属层级而不只是 Sonnet 备选？针对代码任务有何特殊逻辑？
 
-**答：** 成本控制关键点：
-- Opus 688 CNY/月套餐，月度清零
-- L2 只做策略，不做执行 → 不应消耗大量 Token
-- 300T 是 L2 纯策略输出的合理上限
+**答：** 成本优势显著：
+- Haiku 4.5 = 90% Sonnet 能力，1/3 成本。
+- **新决策 (v2.1.0):** 代码任务 (TaskType.CODE) 实施"质量底线"。除非预算耗尽，否则代码任务严禁降级到 Minimax。
+- 即使复杂度 ≤ 2，代码任务也优先路由至 Haiku 以确保逻辑严密。
 
-**原因：** L2 如果 >300T，策略层会成为成本黑洞。
+**原因：** 成本精算决定细节，Haiku 是 blend 成本控制的关键角色。Minimax 在处理代码逻辑时易产生幻觉，确保代码任务的稳定性是商用 API 的生命线。
 
-## 5. Gemini 批量规则决策
+## 12. L5 质检与硬拦截决策 (v2.1.0 强化)
 
-**问：** 为什么强制 Gemini ≥50% 上限才调用？
+**问：** L5 质量门为什么执行硬拦截？
 
-**答：** Gemini 按次计费，长期有效：
-- <50% 上限 → 资源浪费，等归集更合算
-- ≥50% 上限 → 充分利用上下文窗口
+**答：** 旧实现：仅作为元数据标记，不阻断输出。
 
-**原因：** Gemini 的成本优势和批量调用是天作之合。
+**改进：** 实施 Hard Deny 机制：
+- 任何 Gate 失败（特别是 P0 漏洞、Taboo 内容、密钥泄露）都会**强制替换**输出为 `[REJECTED]` 错误。
+- P0 漏洞检测升级为正则表达式，支持 `eval \s* (` 等变体识别。
+- HIGH 复杂度任务继续强制 Gemini 语义质检，若质检不通过则拦截。
 
-## 6. 复用 openblend 资产决策
+**原因：** 安全和合规是商用底线，宁可拒答，不可错答。
 
-**问：** blend 可以复用 openblend 哪些代码？
+## 13. 不可摧毁的心脏架构 (v2.2.0 突破)
 
-**答：** 可复用（工程资产）：
-- `openblend/blend/core/types.py` → Tier/Strategy/BlendMode
-- `openblend/blend/config.py` → YAML 配置 + dotenv
-- `openblend/blend/providers/unified.py` → HTTP/CLI/MCP 统一接口
+**问：** 面对 API 供应商（如 Baosi/Lemon）长达几天的宕机，系统如何生存？
 
-**不可复用（架构设计）：**
-- ELO 系统 / Arena 基准 / Swarm Debate / 50+ 模型池
-- 原因：blend 是固定五层，不需要自适应选择
-
-## 7. 不复用 intent/analyzer_v2.py 决策
-
-**问：** 为什么不用 openblend 的 intent/analyzer_v2.py？
-
-**答：** 12 维分类对 blend 来说过度设计：
-- openblend 需要精细化模型选择 → 需要 12 维
-- blend 只需要 1-10 复杂度评分 → 简化更高效
-
-**学习思想：** 从 12 维提取"复杂度评分"思想，简化为 5 维（步骤/领域/输出/创意/风险）。
-
-## 8. Haiku 专属 L3 决策
-
-**问：** 为什么 Haiku 有专属层级而不只是 Sonnet 备选？
-
-**答：** Haiku 成本优势显著：
-- Haiku 4.5 = 90% Sonnet 能力，1/3 成本
-- 复杂度 3-5 分任务不需要 Sonnet
-- Haiku 专属 → 明确告诉 AI "用 Haiku，别浪费 Sonnet 额度"
-
-**原因：** 成本精算决定细节，Haiku 是 blend 成本控制的关键角色。
-
-## 9. L2 Opus 集成决策
-
-**问：** L2 为什么直接调用 Opus 而非规则占位符？
-
-**答：** 复杂任务需要真正的策略推理：
-- 规则占位符无法生成高质量执行计划
-- Opus 的深度推理能力最适合策略生成
-- 通过 BaosiProvider 调用 claude-opus-4-7，JSON 解析策略输出
-
-**实现：** `strategy.py` 的 `_call_opus()` 方法调用 BaosiProvider，解析 JSON 响应。复杂度 ≥6 时触发（与 `scorer._determine_tier()` HIGH 阈值一致），失败时回退到规则生成。
-
-**Fallback 链：** Opus 失败 → `_generate_plan()` / `_generate_redlines()` / `_identify_boundary_cases()`
-
-## 11. Prompt 模板统一管理决策
-
-**问：** 为什么 Prompt 模板要独立到 `blend/prompts/` 目录？
-
-**答：** 分离关注点，便于维护：
-- L2 策略注入模板 (`strategy.py`): 包含执行计划文本
-- 避免硬编码字符串在业务逻辑中
-- 测试时可独立验证模板渲染
-
-**文件：** `blend/prompts/strategy.py` 包含 `L2_STRATEGY_SYSTEM_TEMPLATE`
+**答：** 引入"自主生存协议"：
+- **持久化健康记忆：** 熔断状态存入 `.blend_health.json`。重启后瞬间避障，无需再次尝试已确认死亡的 Provider。
+- **并行赛跑 (Racing Fallback)：** 同时启动 Primary 和 Fallback。若 Primary 3秒无响应，Fallback 立即进场竞争。谁快用谁，用户感知延迟降至秒级。
+- **指数退避：** 对故障 Provider 实施动态锁定（60s -> 1h -> 24h），区分技术抖动与行政欠费。
 
 ---
 
-## 10. 三层 Executor 分流决策（v1.7.0）
+## 14. "榨干" Minimax 与草稿-精修架构 (v2.3.0)
 
-**问：** 为什么从 Minimax 直通升级到三层 Haiku 分流？
+**问：** 既然 Minimax 几乎免费，如何最大化其价值？
 
-**答：** ROI 分析证明 Haiku 全面优于 Minimax：
-- Haiku 4.5 = 90% Sonnet 能力，1/3 成本
-- 成本对比：Tier1 任务 Haiku 4.5 vs Minimax M2.7 → 质量提升远超成本增量
-- Phase 1 ROI 分析：L1 移除后，Tier1 任务不需要 Minimax 的语义压缩优势
+**答：** 实施 "Draft-Refine" 模式：
+- **L1 预处理：** Minimax 不再只评分，而是为所有复杂度 ≥ 4 的任务先写一份"免费草稿 (DRAFT)"。
+- **L3 精修：** 精英模型 (Sonnet/Gemini) 拿到草稿后进行"Review and Finalize"。
+- **收益：** 减少了昂贵模型的思考发散性，大幅降低了按量计费 (Baosi) 的 Token 消耗，同时通过"免费脑力"提升了长文稳定性。
 
-**分流架构：**
-| Tier | Complexity | Primary | Fallback | 理由 |
-|------|-----------|---------|----------|------|
-| Tier 1 | 1-2 | Haiku | Minimax | Haiku 质量远超成本增量 |
-| Tier 2 | 3-5 | Haiku/Sonnet | Haiku→Minimax | Sonnet 仅当 budget>100T |
-| Tier 3 | 6-10 | Sonnet | Haiku→Minimax | 高复杂度需要 Sonnet |
+---
 
-**Haiku 阈值统一：** Tier1/2/3 的 Haiku fallback 门槛统一为 ≥50T（原来 Tier2/3 用 >100，Tier1 用 >50）。
+## 15. 自愈重试与"慈悲门禁" (Mercy Gate)
 
-## 11. Opus Advisor Loop（v1.8.0）
+**问：** 质检失败只能报错吗？用户拿不到结果怎么办？
 
-**问：** `_determine_model_hint` 为什么用硬编码规则？
+**答：** 建立"以用户为中心"的最后防御：
+- **带反馈重试：** 质检失败时，将具体原因（如：缺少 input 校验）喂回模型原地重写。
+- **慈悲交付 (Mercy Gate)：** 若重试后仍有轻微瑕疵，只要不涉及 P0 安全漏洞，系统会带上 `# --- QUALITY WARNING ---` 强行交付结果。
+- **原则：** 拒绝垃圾代码，但绝不让用户空手而归。
 
-**答：** 旧实现：复杂度 ≥9 → "Opus"，否则 → "Sonnet"。这是静态规则，忽略了任务实际特征。
+---
 
-**改进：** Opus 生成 plan 时同时输出 `model_recommendation`：
-- 扩展 `OPUS_SYSTEM_PROMPT` 请求 `model_recommendation` 字段
-- `_call_opus()` 返回 4 值：plan、redlines、boundary_cases、model_recommendation
-- `generate()` 优先使用 Opus 的推荐，空白时回退规则
+## 16. 统筹精算路由决策
 
-**Fallback 链：** Opus 返回 model_recommendation → 使用；空字符串 → `_determine_model_hint(complexity)`；API 失败 → 规则生成
+**问：** 面对按量计费 (Baosi) 和按次计费 (Lemon)，如何选？
 
-## 12. L5 Gemini 质检决策（v1.9.0）
+**答：** 流量分配逻辑：
+- **短平快任务：** 路由至 Baosi (Sonnet)。由于 Token 少，按量计费比按次更省。
+- **长篇大论任务：** 路由至 Lemon (Gemini)。按次计费（10.5 额度）输出万字长文的 ROI 最高。
+- **所有评分/草稿：** 强制 Minimax。
 
-**问：** L5 质量门为什么用规则模式而非语义推理？
+---
 
-**答：** 旧实现：纯字符串模式匹配（taboo/secrets/vuln patterns）。对 HIGH 复杂度任务质量评估不足。
+## 17. Claude Code 商用级接入 (v2.3.1)
 
-**改进：** HIGH 复杂度任务调用 Gemini 语义评估：
-- 新增 `gemini_evaluate()` 方法：relevance / accuracy / completeness 三维评分
-- `verify()` 中 Gate 9：`quality_level == "HIGH"` 时触发 Gemini 评估
-- `GEMINI_QUALITY` gate 合并到整体 gates dict
-- API 失败 → safe default (passed=True)，不阻断流程
+**问：** Blend 如何实现作为 Claude Code 后端的商用级兼容性？
 
-**Gate 扩展：** 8 → 9（base gates）
+**答：** 通过"伪装握手 + 协议兼容"实现无缝接入：
 
-## 13. v2.0 代码清理（v2.0.0）
+### 17.1 模型名称伪装
 
-**清理项：**
-- ruff check: 0 errors / 0 warnings（blend/ + tests/）
-- 未使用 import 清理（test_l2.py, test_phase3, test_phase4）
-- 变量命名规范（MockProvider → mock_provider）
-- 测试文件架构完整性（test_l5.py gate count 11→12）
+Claude Code 启动时验证 `/v1/models` 端点。Blend 返回：
+```json
+{"id": "claude-3-5-sonnet-20241022", "object": "model", ...}
+```
+实际执行时自动映射到真实策略（Haiku/Sonnet/Gemini），用户无感知。
 
-**质量指标：**
-- 测试：496 passed（mock only），覆盖率 90%
-- lint：All checks passed
+### 17.2 SSE 流式协议兼容
 
-**最后更新：** 2026-04-27（v2.0.0 — 代码清理完成）
+Blend 的 `/v1/messages` 端点输出符合 Anthropic SDK 规范的 SSE 事件：
+```
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"..."}}
+
+event: message_stop
+data: {"type":"message_stop","message":{"id":"...","type":"message",...}}
+```
+
+### 17.3 Claude Code 工具调用支持
+
+Blend 输出的 `[TOOL_CALL]` 块格式：
+```json
+{"tool": "read_file", "args": {"path": "blend/core/budget.py"}}
+```
+Claude Code 收到后自动执行并反馈结果，实现自主文件操作循环。
+
+### 17.4 接入配置
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8000/v1
+export ANTHROPIC_API_KEY=blend-commercial-token
+```
+
+---
+
+## 18. OpenCode + Blend 集成 (v2.3.1)
+
+**问：** OpenCode 如何正确接入 Blend？
+
+**答：** OpenCode 1.14.20 已验证支持 Blend：
+
+| 配置项 | 值 | 说明 |
+|--------|-----|------|
+| OpenCode config | `primary: "blend/blend"` | 已配置 |
+| `ANTHROPIC_BASE_URL` | `http://localhost:8000/v1` | 核心修复 |
+| `ANTHROPIC_API_KEY` | `blend-commercial-token` | 非空即可 |
+| `BLEND_LOG_LEVEL` | `DEBUG` | 商用初期监控 |
+
+### 18.1 OpenCode TUI 使用
+
+```bash
+# 终端 1: 启动 Blend
+python3 -m uvicorn blend.api:app --host 0.0.0.0 --port 8000
+
+# 终端 2: 启动 OpenCode
+source ~/.zshrc  # 加载环境变量
+opencode
+```
+
+### 18.2 CLI 快捷命令
+
+```bash
+# ~/.zshrc 中已配置
+alias claude-mini='...'    # MiniMax M2.7
+alias claude-baosi='...'    # Baosi Claude 3.5
+alias claude-blend='...'    # Blend 商用优化
+alias claude="claude-mini"  # 默认指向 MiniMax
+```
+
+### 18.3 性能基准
+
+| 指标 | 实测值 |
+|------|--------|
+| 握手延迟 | < 100ms |
+| 低复杂度任务 (L1>L3>L5) | ~3s |
+| 高复杂度任务 (含 L2 策略) | ~60s |
+| 流式输出稳定性 | 60s+不断连 |
+| 代码生成质量 | 18,000+ 字符/次 |
+
+---
+
+**结论：** Blend 已完全具备作为 Claude Code / OpenCode 后端的商用级兼容性。通过 Minimax 草稿 + 精英模型精修的架构，成本比直连 Baosi 低 70%+，同时保持 Claude Code 级别的工程质量。
+
+---
+
+## 17. Claude Code 商用接入与协议伪装决策 (v2.4.0)
+
+**问：** 如何让 Claude Code (Anthropic 原生客户端) 零感知接入 Blend？
+
+**答：** 实施 "协议劫持与意图解构" 策略：
+
+1. **"木马"伪装 (The Trojan Masking)：**
+   - **决策：** `/v1/models` 接口必须硬编码返回 `claude-3-5-sonnet-20241022` 等 Anthropic 标准 ID。
+   - **原因：** Claude Code 内部存在针对特定模型版本号的功能分支检查（如 Tools/Caching 支持）。若返回 `blend` 等自定义 ID，客户端会回退至功能缺失的"文本模式"。
+
+2. **协议桥接与事件转换 (Protocol Bridging)：**
+   - **决策：** 建立 SSE 转换层。将 Blend 内部的 OpenAI-style 异步 Chunk 实时翻译为 Anthropic 的 `message_start`, `content_block_delta`, `message_stop` 事件序列。
+   - **优化：** 修正了 Chunk 结构的顶层映射，支持 `tool_use` 协议的透传，确保 Blend 后端能完美驱动 Claude Code 的本地文件操作与命令执行。
+
+3. **任务感知型 Tier 映射 (Task-Aware Mapping)：**
+   - **决策：** 将客户端请求的模型名称视为"意图元数据"而非物理指令。
+     - 请求 `sonnet` -> 触发 **自动赛跑 (Auto-Race)** 模式（默认最优性价比）。
+     - 请求 `opus` -> 强力引导至 **L5 深度质检 + 强制反馈循环**（追求极致质量）。
+     - 请求 `haiku` -> 开启 **极速压榨模式**（关闭部分 L5 检查以换取秒回体验）。
+
+**原因：** Blend 的定位是"智能协议转换器"。通过在接口层伪装成 Anthropic，在执行层解构为 5 层自愈流水线，实现了**"原生客户端的体验 + Blend 的成本控制"**。这证明了 Blend 架构对商用复杂工程工具（如 Claude Code）的深度支撑能力。

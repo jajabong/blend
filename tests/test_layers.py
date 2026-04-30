@@ -4,7 +4,6 @@ from blend.core.layers import (
     L1Output,
     L2Output,
     L3Output,
-    L4Output,
     L5Output,
     Layer,
 )
@@ -73,22 +72,6 @@ class TestL3Output:
         assert output.model_used == "haiku"
         assert output.tokens_used == 500
         assert output.quality_gate_passed is True
-
-
-class TestL4Output:
-    """Test L4 output structure."""
-
-    def test_l4_output_creation(self) -> None:
-        """Test creating L4Output."""
-        output = L4Output(
-            compressed_output="Compressed response",
-            original_tokens=1000,
-            compressed_tokens=200,
-            compression_ratio=0.8,
-        )
-        assert output.original_tokens == 1000
-        assert output.compressed_tokens == 200
-        assert output.compression_ratio == 0.8
 
 
 class TestL5Output:

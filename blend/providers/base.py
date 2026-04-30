@@ -15,6 +15,7 @@ class LLMResponse:
     raw: dict[str, Any]
     finish_reason: str = "stop"
     tool_calls: list[dict[str, Any]] | None = None
+    thought: str | None = None
 
 
 class LLMProvider(ABC):

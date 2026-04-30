@@ -48,6 +48,7 @@ class TestChatCompletions:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         with patch("blend.api.orchestrator") as mock_orch:
             mock_orch.process_messages.return_value = type("MockResult", (), mock_result)()
@@ -96,6 +97,7 @@ class TestChatCompletions:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         with patch("blend.api.orchestrator") as mock_orch:
             mock_orch.process_messages.return_value = type("MockResult", (), mock_result)()
@@ -158,6 +160,7 @@ class TestAPIIntegration:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         with patch("blend.api.orchestrator") as mock_orch:
             mock_orch.process_messages.return_value = type("MockResult", (), mock_result)()
@@ -272,6 +275,7 @@ class TestToolsPassthrough:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         with patch("blend.api.orchestrator") as mock_orch:
             mock_orch.process_messages.return_value = type("MockResult", (), mock_result)()
@@ -316,6 +320,7 @@ class TestJSONMode:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         with patch("blend.api.orchestrator") as mock_orch:
             mock_orch.process_messages.return_value = type("MockResult", (), mock_result)()
@@ -353,6 +358,7 @@ class TestMultimodal:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         with patch("blend.api.orchestrator") as mock_orch:
             mock_orch.process_messages.return_value = type("MockResult", (), mock_result)()
@@ -425,6 +431,7 @@ class TestOpenAIExtendedParams:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         base.update(overrides)
         return base
@@ -575,6 +582,7 @@ class TestAgentModeParam:
             "tool_calls": None,
             "tool_call_count": 0,
             "tool_loop_iterations": 0,
+            "thought": "No thought",
         }
         with patch("blend.api.orchestrator") as mock_orch:
             mock_orch.process_messages.return_value = type("MockResult", (), mock_result)()

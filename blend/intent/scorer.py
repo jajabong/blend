@@ -1,6 +1,7 @@
 """L1 Complexity Scorer - Scores prompt complexity from 1-10."""
 
 from dataclasses import dataclass
+
 try:
     from enum import StrEnum
 except ImportError:
@@ -87,6 +88,8 @@ class ComplexityScorer:
         output = self._score_output_length(output_length)
         creativity_score = max(0, min(2, creativity))
         risk = self._score_risk(prompt)
+        instruction = self._score_instruction_complexity(prompt)
+        scale = self._score_scale(prompt)
 
         return {
             "steps": steps,
@@ -94,7 +97,41 @@ class ComplexityScorer:
             "output": output,
             "creativity": creativity_score,
             "risk": risk,
+            "instruction": instruction,
+            "scale": scale,
         }
+
+    def _score_scale(self, prompt: str) -> int:
+        """Score based on the scale of the system/requirement."""
+        prompt_lower = prompt.lower()
+        # High scale indicators
+        high_scale = [
+            "million", "billion", "100m", "10m", "dau", "global", "worldwide",
+            "亿", "万", "全球", "超大规模", "高并发", "海量"
+        ]
+        if any(kw in prompt_lower for kw in high_scale):
+            return 2
+        return 0
+
+    def _score_instruction_complexity(self, prompt: str) -> int:
+        """Score based on logical complexity of the instruction."""
+        prompt_lower = prompt.lower()
+        # Complex logical connectors and style instructions
+        complex_indicators = [
+            " but ", " although ", " however ", " while ",
+            " instead of ", " style of ", " in the manner of ",
+            " compare ", " contrast ", " evaluate ", " justify ",
+            " 但是 ", " 虽然 ", " 尽管 ", " 而不是 ", " 风格 ",
+            " 对比 ", " 评价 ", " 论证 "
+        ]
+
+        count = sum(1 for indicator in complex_indicators if indicator in prompt_lower)
+
+        if count >= 2:
+            return 2
+        elif count >= 1:
+            return 1
+        return 0
 
     def _score_steps(self, prompt: str) -> int:
         """Score based on number of task steps."""
@@ -140,14 +177,23 @@ class ComplexityScorer:
             "architecture",
             "distributed",
             "scalability",
-            "distributed",
             "system",
             "infrastructure",
+            "quantum",
+            "thermodynamics",
+            "physics",
+            "mathematics",
+            "philosophy",
             "安全",
             "金融",
             "架构",
             "系统",
             "项目",
+            "量子",
+            "热力学",
+            "物理",
+            "数学",
+            "哲学",
         ]
         medium_keywords = [
             "code",
@@ -161,7 +207,6 @@ class ComplexityScorer:
             "algorithm",
             "data",
             "test",
-            "code",
             "implement",
             "development",
             "process",
@@ -269,12 +314,20 @@ class ComplexityScorer:
             r"\banalysis\b",
             r"\bevaluat[eing]\b",
             r"\bcompare\b",
+            r"\bexplain\b",
+            r"\bwhy\b",
+            r"\bdesign\b",
+            r"\barchitecture\b",
             r"推理",
             r"逻辑",
             r"数学",
             r"计算",
             r"分析",
             r"证明",
+            r"解释",
+            r"为什么",
+            r"设计",
+            r"架构",
         ]
         for kw in reasoning_keywords:
             if re.search(kw, prompt_lower):
@@ -326,6 +379,8 @@ class ComplexityScorer:
             r"\bclass\b",
             r"\bimplement\b",
             r"\bdebug\b",
+            r"\bcrud\b",
+            r"\bendpoint\b",
             r"代码",
             r"编程",
             r"开发",

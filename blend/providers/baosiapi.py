@@ -2,22 +2,52 @@
 
 import os
 import time
+from collections.abc import Generator
 from typing import Any
 
 import httpx
 
+from blend.core.circuit_breaker import get_registry
 from blend.providers.base import LLMResponse
 
 
-def _retry_request(fn: Any, retries: int = 3) -> Any:
-    """Execute fn with exponential backoff retry on transient errors."""
+def _retry_request(
+    fn: Any,
+    retries: int = 3,
+    provider_name: str = "baosi",
+) -> Any:
+    """Execute fn with exponential backoff retry on transient errors.
+
+    Integrates circuit breaker for fast-fail on repeated failures.
+    Records success/failure to the circuit breaker.
+    """
+    registry = get_registry()
+    breaker = registry.get(provider_name)
+
     for attempt in range(retries):
+        # Fast-fail if circuit is open
+        if not breaker.allow_request():
+            raise httpx.ConnectError(f"Circuit breaker open for {provider_name}")
+
         try:
-            return fn()
-        except (httpx.ConnectError, httpx.RemoteProtocolError, OSError):
+            result = fn()
+            breaker.record_success()
+            return result
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.TimeoutException, OSError):
+            breaker.record_failure()
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
+        except httpx.HTTPStatusError as e:
+            # 401/503 are effectively service down. Trip breaker immediately!
+            status_code = e.response.status_code
+            if status_code in (401, 503):
+                # Force open the circuit by hitting threshold and passing code
+                for _ in range(breaker.failure_threshold):
+                    breaker.record_failure(error_code=status_code)
+            raise
+        except Exception:
+            raise
 
 
 class BaosiProvider:
@@ -41,6 +71,16 @@ class BaosiProvider:
             "CLAUDE_BASE_URL", "https://api.baosiapi.com/v1"
         )
         self._timeout = timeout
+        self._client: httpx.Client | None = None
+
+    def _get_client(self) -> httpx.Client:
+        """Get or create a persistent HTTP client with connection pooling."""
+        if self._client is None:
+            self._client = httpx.Client(
+                timeout=self._timeout,
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            )
+        return self._client
 
     def chat(
         self,
@@ -75,12 +115,12 @@ class BaosiProvider:
         }
 
         def _do_request() -> dict[str, Any]:
-            with httpx.Client(timeout=self._timeout) as client:
-                resp = client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
-                return dict[str, Any](resp.json())
+            client = self._get_client()
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
 
-        data = _retry_request(_do_request)
+        data = _retry_request(_do_request, provider_name="baosi")
         msg = data["choices"][0]["message"]
         return LLMResponse(
             content=msg.get("content", ""),
@@ -96,17 +136,8 @@ class BaosiProvider:
         messages: list[dict[str, str]],
         model: str = "claude-opus-4-7",
         **kwargs: Any,
-    ) -> list[str]:
-        """Send streaming chat completion request.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-            model: Model ID to use
-            **kwargs: Additional parameters
-
-        Returns:
-            List of response chunks
-        """
+    ) -> Generator[str, None, None]:
+        """Send streaming chat completion request."""
         url = f"{self._base_url}/chat/completions"
 
         headers = {
@@ -121,20 +152,28 @@ class BaosiProvider:
             **kwargs,
         }
 
-        chunks: list[str] = []
+        def _do_stream() -> Generator[str, None, None]:
+            client = self._get_client()
+            with client.stream("POST", url, json=payload, headers=headers) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if line.startswith("data: "):
+                        if line == "data: [DONE]":
+                            break
+                        yield line[6:]
 
-        def _do_stream() -> None:
-            with httpx.Client(timeout=self._timeout) as client:
-                with client.stream("POST", url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
-                    for line in response.iter_lines():
-                        if line.startswith("data: "):
-                            if line == "data: [DONE]":
-                                break
-                            chunks.append(line[6:])
+        # For stream, we record success on initiation
+        registry = get_registry()
+        breaker = registry.get("baosi")
+        if not breaker.allow_request():
+            raise httpx.ConnectError("Circuit breaker open for baosi")
 
-        _retry_request(_do_stream)
-        return chunks
+        try:
+            yield from _do_stream()
+            breaker.record_success()
+        except Exception:
+            breaker.record_failure()
+            raise
 
     def list_models(self) -> list[dict[str, Any]]:
         """List available models."""
@@ -144,9 +183,15 @@ class BaosiProvider:
             "Authorization": f"Bearer {self._api_key}",
         }
 
-        with httpx.Client(timeout=self._timeout) as client:
-            response = client.get(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        client = self._get_client()
+        response = client.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
 
         return list(data.get("data", []))
+
+    def close(self) -> None:
+        """Close the persistent HTTP client."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None

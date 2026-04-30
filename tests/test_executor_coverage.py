@@ -44,51 +44,66 @@ class TestExecutorGetBudget:
 class TestExecutorSelectModelEdgeCases:
     """Test _select_model edge cases."""
 
+    def _mock_registry(self):
+        """Return a mock circuit breaker registry with all breakers closed."""
+        mock_breaker = MagicMock()
+        mock_breaker.allow_request.return_value = True
+        mock_breaker.state = MagicMock(value="closed")
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = mock_breaker
+        return mock_registry
+
     def test_complexity_zero_selects_haiku(self) -> None:
         """Complexity 0 (≤2 Tier1) should select Haiku."""
-        executor = Executor()
-        executor.resource_model = MagicMock()
-        executor.resource_model.get_remaining.return_value = 10000
-        selection = executor._select_model(complexity=0, task_type="general")
-        assert selection.primary == "haiku"
+        with patch("blend.core.circuit_breaker.get_registry", return_value=self._mock_registry()):
+            executor = Executor()
+            executor.resource_model = MagicMock()
+            executor.resource_model.get_remaining.return_value = 10000
+            selection = executor._select_model(complexity=0, task_type="general")
+            assert selection.primary == "haiku"
 
     def test_complexity_negative_treated_as_low(self) -> None:
         """Negative complexity (≤2 Tier1) should select Haiku."""
-        executor = Executor()
-        executor.resource_model = MagicMock()
-        executor.resource_model.get_remaining.return_value = 10000
-        selection = executor._select_model(complexity=-1, task_type="general")
-        assert selection.primary == "haiku"
+        with patch("blend.core.circuit_breaker.get_registry", return_value=self._mock_registry()):
+            executor = Executor()
+            executor.resource_model = MagicMock()
+            executor.resource_model.get_remaining.return_value = 10000
+            selection = executor._select_model(complexity=-1, task_type="general")
+            assert selection.primary == "haiku"
 
     def test_complexity_very_high_treated_as_high(self) -> None:
         """Very high complexity (10+) treated as high."""
-        executor = Executor()
-        executor.resource_model = MagicMock()
-        executor.resource_model.get_remaining.side_effect = (
-            lambda m: 200 if m in ("sonnet", "haiku") else 10000
-        )
-        selection = executor._select_model(complexity=10, task_type="general")
-        assert selection.primary == "sonnet"
+        with patch("blend.core.circuit_breaker.get_registry", return_value=self._mock_registry()):
+            executor = Executor()
+            executor.resource_model = MagicMock()
+            executor.resource_model.get_remaining.side_effect = (
+                lambda m: 200 if m in ("sonnet", "haiku") else 10000
+            )
+            selection = executor._select_model(complexity=10, task_type="general")
+            assert selection.primary == "sonnet"
 
-    def test_tool_call_task_type_routes_to_gemini(self) -> None:
-        """tool_call task type routes to Gemini."""
-        executor = Executor()
-        executor.resource_model = MagicMock()
-        executor.resource_model.get_remaining.side_effect = (
-            lambda m: 10000 if m == "gemini" else 0
-        )
-        selection = executor._select_model(complexity=5, task_type="tool_call")
-        assert selection.primary == "gemini"
+    def test_tool_call_task_type_routes_to_sonnet(self) -> None:
+        """tool_call task type (not in gemini_types) routes based on complexity."""
+        with patch("blend.core.circuit_breaker.get_registry", return_value=self._mock_registry()):
+            executor = Executor()
+            executor.resource_model = MagicMock()
+            executor.resource_model.get_remaining.side_effect = (
+                lambda m: 10000 if m == "sonnet" else 0
+            )
+            selection = executor._select_model(complexity=5, task_type="tool_call")
+            # tool_call is not in gemini_types, so it routes via complexity logic
+            assert selection.primary == "sonnet"
 
     def test_multimodal_task_type_routes_to_gemini(self) -> None:
-        """multimodal task type routes to Gemini."""
-        executor = Executor()
-        executor.resource_model = MagicMock()
-        executor.resource_model.get_remaining.side_effect = (
-            lambda m: 10000 if m == "gemini" else 0
-        )
-        selection = executor._select_model(complexity=3, task_type="multimodal")
-        assert selection.primary == "gemini"
+        """multimodal task type routes to Gemini (it's in gemini_types)."""
+        with patch("blend.core.circuit_breaker.get_registry", return_value=self._mock_registry()):
+            executor = Executor()
+            executor.resource_model = MagicMock()
+            executor.resource_model.get_remaining.side_effect = (
+                lambda m: 10000 if m == "gemini" else 0
+            )
+            selection = executor._select_model(complexity=3, task_type="multimodal")
+            assert selection.primary == "gemini"
 
 
 class TestExecutorExecuteEdgeCases:

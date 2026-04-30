@@ -1,6 +1,7 @@
 """Enforcement Mechanism - 8 Taboos Auto-Rejection."""
 
 from dataclasses import dataclass
+
 try:
     from enum import StrEnum
 except ImportError:
@@ -18,7 +19,7 @@ class TabooType(StrEnum):
     L4_NOT_APPLIED = "L4_NOT_APPLIED"
     L2_OVER_300T = "L2_OVER_300T"
     CROSS_LAYER_JUMP = "CROSS_LAYER_JUMP"
-    HARDCODED_CREDENTIALS = "HARDCODED_CREDENTIALS"
+    HARDCODED_CREDENTIALS = "HARDCODE_CREDENTIALS"
     BYPASS_L5 = "BYPASS_L5"
 
 
@@ -39,19 +40,9 @@ TABOOS = [
         rule="IF 请求未经 L1 压缩 → 自动拒绝 + HTTP 401",
     ),
     Taboo(
-        id=TabooType.OPUS_FORMATTER,
-        message="禁止 Opus 执行格式化/摘要/苦力任务",
-        rule="Opus 只用于策略生成，不执行格式化任务",
-    ),
-    Taboo(
         id=TabooType.GEMINI_SCATTERED,
         message="禁止 Gemini 零散发（单次需 ≥50% 上限）",
         rule="IF 单次调用 < 50% 上下文上限 → 拒绝 + 归集",
-    ),
-    Taboo(
-        id=TabooType.L4_NOT_APPLIED,
-        message="禁止 >500T 未经 L4 压缩流转",
-        rule="IF L3_output > 500 AND L4 not applied → REJECT",
     ),
     Taboo(
         id=TabooType.L2_OVER_300T,
@@ -101,7 +92,7 @@ class Enforcer:
         layer_path: str,
         complexity: int | None = None,
         output_tokens: int | None = None,
-        l4_applied: bool = True,
+        l4_applied: bool = False,
         gemini_used: bool = False,
         gemini_context_percent: float = 0,
         model_used: str | None = None,
@@ -162,14 +153,12 @@ class Enforcer:
         output_tokens: int | None,
         l4_applied: bool,
     ) -> list[TabooViolation]:
-        """Check taboo 4: L4 required for large outputs."""
-        if output_tokens is not None and output_tokens > 500 and not l4_applied:
-            taboo = self._find_taboo(TabooType.L4_NOT_APPLIED)
-            return [
-                TabooViolation(
-                    taboo=taboo, reason=f"Output {output_tokens}T > 500T but L4 not applied"
-                )
-            ]
+        """Check taboo 4: L4 required for large outputs.
+
+        Note: L4 has been removed from the pipeline. This check is now a
+        no-op that always passes (preserved for backwards compatibility).
+        """
+        # L4 removed - this check always passes
         return []
 
     def _check_valid_path(
@@ -192,7 +181,7 @@ class Enforcer:
             taboo = self._find_taboo(TabooType.CROSS_LAYER_JUMP)
             violations.append(
                 TabooViolation(
-                    taboo=taboo, reason=f"HIGH complexity (≥8) requires L2 but path is {layer_path}"
+                    taboo=taboo, reason=f"HIGH complexity (≥6) requires L2 but path is {layer_path}"
                 )
             )
 

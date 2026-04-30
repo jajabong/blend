@@ -2,7 +2,7 @@
 
 from blend.core.budget import ResourceModel
 from blend.core.enforcer import Enforcer
-from blend.core.layers import L1Output, L2Output, L3Output, L4Output, L5Output
+from blend.core.layers import L1Output, L2Output, L3Output, L5Output
 from blend.intent.scorer import ComplexityScorer
 
 
@@ -90,16 +90,6 @@ class TestLayerOutputs:
         assert output.raw_output == "Test output"
         assert output.tokens_used == 100
 
-    def test_l4_output_format(self) -> None:
-        """L4 output should have correct format."""
-        output = L4Output(
-            compressed_output="Compressed",
-            original_tokens=500,
-            compressed_tokens=150,
-            compression_ratio=0.7,
-        )
-        assert output.compression_ratio == 0.7
-
     def test_l5_output_format(self) -> None:
         """L5 output should have correct format."""
         output = L5Output(
@@ -158,20 +148,20 @@ class TestEnforcerIntegration:
         # Check violation mentions L1
         assert any("L1" in str(v.taboo.id) for v in result.violations)
 
-    def test_large_output_requires_l4(self) -> None:
-        """Large output without L4 should be blocked."""
+    def test_large_output_l4_removed(self) -> None:
+        """L4 has been removed - large output without L4 now passes."""
         enforcer = Enforcer()
         result = enforcer.enforce(
             request={"prompt": "Hello"},
             layer_path="L1>L3>L5",
             complexity=3,
-            output_tokens=600,  # > 500 threshold
-            l4_applied=False,  # L4 not applied!
+            output_tokens=600,  # > 500 threshold (L4 removed, no longer enforced)
+            l4_applied=False,
             gemini_used=False,
             gemini_context_percent=0,
             model_used="minimax",
         )
-        assert result.allowed is False
+        assert result.allowed is True
 
 
 class TestBudgetIntegration:

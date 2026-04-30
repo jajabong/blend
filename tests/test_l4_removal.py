@@ -60,8 +60,8 @@ class TestL5Gate6Aligned:
         )
         assert result.gates_checked["l4_applied_if_needed"] is True
 
-    def test_l5_gate6_fail_above_1000_without_l4(self) -> None:
-        """Gate 6 should fail when output > 1000T and L4 not applied."""
+    def test_l5_gate6_always_passes_l4_removed(self) -> None:
+        """L4 has been removed - Gate 6 always passes regardless of output size."""
         from blend.core.verifier import QualityVerifier
 
         verifier = QualityVerifier()
@@ -72,8 +72,8 @@ class TestL5Gate6Aligned:
             output_tokens=1100,
             l4_applied=False,
         )
-        # Should fail gate 6 since > 1000T and no L4
-        assert result.gates_checked["l4_applied_if_needed"] is False
+        # Gate 6 always passes since L4 is removed
+        assert result.gates_checked["l4_applied_if_needed"] is True
 
     def test_l5_gate6_pass_above_1000_with_l4(self) -> None:
         """Gate 6 should pass when output > 1000T and L4 was applied."""

@@ -1,6 +1,7 @@
 """Five-layer architecture for blend."""
 
 from dataclasses import dataclass
+
 try:
     from enum import StrEnum
 except ImportError:
@@ -51,16 +52,7 @@ class L3Output:
     tokens_used: int
     tokens_budget_remaining: int
     quality_gate_passed: bool
-
-
-@dataclass(frozen=True)
-class L4Output:
-    """Output from L4 compression layer."""
-
-    compressed_output: str
-    original_tokens: int
-    compressed_tokens: int
-    compression_ratio: float
+    thought: str | None = None
 
 
 @dataclass(frozen=True)

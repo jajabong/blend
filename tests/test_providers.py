@@ -9,6 +9,15 @@ from blend.providers.lemonapi import LemonProvider
 from blend.providers.minimax import MinimaxProvider
 
 
+def _mock_circuit_breaker():
+    """Return a mock circuit breaker that allows all requests."""
+    mock_breaker = MagicMock()
+    mock_breaker.allow_request.return_value = True
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_breaker
+    return mock_registry
+
+
 class TestLemonProvider:
     """Tests for LemonProvider (Gemini)."""
 
@@ -19,15 +28,14 @@ class TestLemonProvider:
             "model": "[L]gemini-3-flash-preview",
             "usage": {"prompt_tokens": 10, "completion_tokens": 20},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = LemonProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = LemonProvider(api_key="test-key")
-            result = provider.chat(messages=[{"role": "user", "content": "hello"}])
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                result = provider.chat(messages=[{"role": "user", "content": "hello"}])
 
             assert result.content == "Gemini response"
             assert result.model == "[L]gemini-3-flash-preview"
@@ -40,15 +48,14 @@ class TestLemonProvider:
             "model": "[L]gemini-3-flash-preview",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = LemonProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = LemonProvider(api_key="test-key")
-            provider.chat(messages=[{"role": "user", "content": "hi"}])
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                provider.chat(messages=[{"role": "user", "content": "hi"}])
 
             call_kwargs = mock_client.post.call_args[1]
             payload = call_kwargs["json"]
@@ -62,18 +69,17 @@ class TestLemonProvider:
             "model": "[L]gemini-3-pro-preview",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = LemonProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = LemonProvider(api_key="test-key")
-            result = provider.chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="[L]gemini-3-pro-preview",
-            )
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                result = provider.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="[L]gemini-3-pro-preview",
+                )
 
             call_kwargs = mock_client.post.call_args[1]
             assert call_kwargs["json"]["model"] == "[L]gemini-3-pro-preview"
@@ -86,19 +92,18 @@ class TestLemonProvider:
             "model": "[L]gemini-3-flash-preview",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = LemonProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = LemonProvider(api_key="test-key")
-            provider.chat(
-                messages=[{"role": "user", "content": "hi"}],
-                temperature=0.7,
-                max_tokens=500,
-            )
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                provider.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    temperature=0.7,
+                    max_tokens=500,
+                )
 
             payload = mock_client.post.call_args[1]["json"]
             assert payload["temperature"] == 0.7
@@ -108,16 +113,15 @@ class TestLemonProvider:
         """chat() propagates httpx HTTP errors."""
         import httpx
 
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = LemonProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.raise_for_status.side_effect = httpx.HTTPError("server error")
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = LemonProvider(api_key="test-key")
-            with pytest.raises(httpx.HTTPError):
-                provider.chat(messages=[{"role": "user", "content": "hi"}])
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                with pytest.raises(httpx.HTTPError):
+                    provider.chat(messages=[{"role": "user", "content": "hi"}])
 
     def test_chat_uses_env_api_key(self) -> None:
         """Uses LEMON_API_KEY from environment when no key provided."""
@@ -126,19 +130,18 @@ class TestLemonProvider:
             "model": "[L]gemini-3-flash-preview",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_response = MagicMock()
-            mock_response.json.return_value = mock_data
-            mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
             with patch.dict("os.environ", {"LEMON_API_KEY": "env-key"}):
                 provider = LemonProvider()
-                provider.chat(messages=[{"role": "user", "content": "hi"}])
+                mock_client = MagicMock()
+                mock_response = MagicMock()
+                mock_response.json.return_value = mock_data
+                mock_client.post.return_value = mock_response
+                with patch.object(provider, "_get_client", return_value=mock_client):
+                    provider.chat(messages=[{"role": "user", "content": "hi"}])
 
-            headers = mock_client.post.call_args[1]["headers"]
-            assert "env-key" in headers["Authorization"]
+                headers = mock_client.post.call_args[1]["headers"]
+                assert "env-key" in headers["Authorization"]
 
     def test_chat_stream_returns_chunks(self) -> None:
         """chat_stream() returns parsed chunks."""
@@ -148,21 +151,18 @@ class TestLemonProvider:
             "data: [DONE]",
         ]
 
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = LemonProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_stream_response = MagicMock()
             mock_stream_response.status_code = 200
             mock_stream_response.raise_for_status = MagicMock()
             mock_stream_response.iter_lines.return_value = iter(mock_lines)
-            mock_client.stream.return_value.__enter__.return_value = (
-                mock_stream_response
-            )
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = LemonProvider(api_key="test-key")
-            chunks = provider.chat_stream(
-                messages=[{"role": "user", "content": "hi"}]
-            )
+            mock_client.stream.return_value.__enter__.return_value = mock_stream_response
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                chunks = provider.chat_stream(
+                    messages=[{"role": "user", "content": "hi"}]
+                )
 
             # [DONE] line triggers break before last content chunk is processed,
             # so only the chunks before [DONE] are returned
@@ -179,19 +179,16 @@ class TestLemonProvider:
             'data: {"choices":[{"delta":{"content":"should not appear"}}]}',
         ]
 
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.lemonapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = LemonProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_stream_response = MagicMock()
             mock_stream_response.status_code = 200
             mock_stream_response.raise_for_status = MagicMock()
             mock_stream_response.iter_lines.return_value = iter(mock_lines)
-            mock_client.stream.return_value.__enter__.return_value = (
-                mock_stream_response
-            )
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = LemonProvider(api_key="test-key")
-            chunks = provider.chat_stream(messages=[{"role": "user", "content": "hi"}])
+            mock_client.stream.return_value.__enter__.return_value = mock_stream_response
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                chunks = provider.chat_stream(messages=[{"role": "user", "content": "hi"}])
 
             # [DONE] stops loop; "should not appear" never reached
             assert len(chunks) == 2
@@ -208,18 +205,17 @@ class TestBaosiProvider:
             "model": "claude-sonnet-4-6",
             "usage": {"prompt_tokens": 5, "completion_tokens": 15},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.baosiapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = BaosiProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = BaosiProvider(api_key="test-key")
-            result = provider.chat(
-                messages=[{"role": "user", "content": "hello"}],
-                model="claude-sonnet-4-6",
-            )
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                result = provider.chat(
+                    messages=[{"role": "user", "content": "hello"}],
+                    model="claude-sonnet-4-6",
+                )
 
             assert result.content == "Claude response"
             assert result.model == "claude-sonnet-4-6"
@@ -232,18 +228,17 @@ class TestBaosiProvider:
             "model": "claude-opus-4-7",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.baosiapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = BaosiProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = BaosiProvider(api_key="test-key")
-            provider.chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="claude-opus-4-7",
-            )
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                provider.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="claude-opus-4-7",
+                )
 
             payload = mock_client.post.call_args[1]["json"]
             assert payload["model"] == "claude-opus-4-7"
@@ -255,19 +250,18 @@ class TestBaosiProvider:
             "model": "claude-sonnet-4-6",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.baosiapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = BaosiProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = BaosiProvider(api_key="test-key")
-            provider.chat(
-                messages=[{"role": "user", "content": "hi"}],
-                temperature=0.5,
-                max_tokens=1024,
-            )
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                provider.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    temperature=0.5,
+                    max_tokens=1024,
+                )
 
             payload = mock_client.post.call_args[1]["json"]
             assert payload["temperature"] == 0.5
@@ -277,37 +271,33 @@ class TestBaosiProvider:
         """chat() propagates HTTP errors."""
         import httpx
 
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.baosiapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = BaosiProvider(api_key="bad-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.raise_for_status.side_effect = httpx.HTTPError("403 Forbidden")
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = BaosiProvider(api_key="bad-key")
-            with pytest.raises(httpx.HTTPError):
-                provider.chat(messages=[{"role": "user", "content": "hi"}])
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                with pytest.raises(httpx.HTTPError):
+                    provider.chat(messages=[{"role": "user", "content": "hi"}])
 
     def test_chat_stream(self) -> None:
         """chat_stream() returns parsed chunks."""
         mock_lines = [
             'data: {"choices":[{"delta":{"content":"step1"}}]}',
-            'data: [DONE]',
+            "data: [DONE]",
         ]
 
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.baosiapi.get_registry", return_value=_mock_circuit_breaker()):
+            provider = BaosiProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_stream_response = MagicMock()
             mock_stream_response.status_code = 200
             mock_stream_response.raise_for_status = MagicMock()
             mock_stream_response.iter_lines.return_value = iter(mock_lines)
-            mock_client.stream.return_value.__enter__.return_value = (
-                mock_stream_response
-            )
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = BaosiProvider(api_key="test-key")
-            chunks = provider.chat_stream(messages=[{"role": "user", "content": "hi"}])
+            mock_client.stream.return_value.__enter__.return_value = mock_stream_response
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                chunks = list(provider.chat_stream(messages=[{"role": "user", "content": "hi"}]))
 
             assert len(chunks) == 1
             assert 'content":"step1"' in chunks[0]
@@ -321,14 +311,12 @@ class TestBaosiProvider:
             ]
         }
 
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_response = MagicMock()
-            mock_response.json.return_value = mock_data
-            mock_client.get.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = BaosiProvider(api_key="test-key")
+        provider = BaosiProvider(api_key="test-key")
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_data
+        mock_client.get.return_value = mock_response
+        with patch.object(provider, "_get_client", return_value=mock_client):
             models = provider.list_models()
 
             assert len(models) == 2
@@ -339,14 +327,12 @@ class TestBaosiProvider:
         """list_models() propagates HTTP errors."""
         import httpx
 
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_response = MagicMock()
-            mock_response.raise_for_status.side_effect = httpx.HTTPError("401 Unauthorized")
-            mock_client.get.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = BaosiProvider(api_key="bad-key")
+        provider = BaosiProvider(api_key="bad-key")
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = httpx.HTTPError("401 Unauthorized")
+        mock_client.get.return_value = mock_response
+        with patch.object(provider, "_get_client", return_value=mock_client):
             with pytest.raises(httpx.HTTPError):
                 provider.list_models()
 
@@ -361,15 +347,14 @@ class TestMinimaxProvider:
             "model": "MiniMax-M2.7",
             "usage": {"prompt_tokens": 8, "completion_tokens": 12},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.minimax.get_registry", return_value=_mock_circuit_breaker()):
+            provider = MinimaxProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = MinimaxProvider(api_key="test-key")
-            result = provider.chat(messages=[{"role": "user", "content": "hello"}])
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                result = provider.chat(messages=[{"role": "user", "content": "hello"}])
 
             assert result.content == "Minimax response"
             assert result.model == "MiniMax-M2.7"
@@ -382,15 +367,14 @@ class TestMinimaxProvider:
             "model": "MiniMax-M2.7",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.minimax.get_registry", return_value=_mock_circuit_breaker()):
+            provider = MinimaxProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = MinimaxProvider(api_key="test-key")
-            provider.chat(messages=[{"role": "user", "content": "hi"}])
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                provider.chat(messages=[{"role": "user", "content": "hi"}])
 
             payload = mock_client.post.call_args[1]["json"]
             assert payload["model"] == "MiniMax-M2.7"
@@ -403,18 +387,17 @@ class TestMinimaxProvider:
             "model": "other-model",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.minimax.get_registry", return_value=_mock_circuit_breaker()):
+            provider = MinimaxProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = MinimaxProvider(api_key="test-key")
-            result = provider.chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="other-model",
-            )
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                result = provider.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="other-model",
+                )
 
             payload = mock_client.post.call_args[1]["json"]
             assert payload["model"] == "other-model"
@@ -427,18 +410,17 @@ class TestMinimaxProvider:
             "model": "MiniMax-M2.7",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.minimax.get_registry", return_value=_mock_circuit_breaker()):
+            provider = MinimaxProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.json.return_value = mock_data
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = MinimaxProvider(api_key="test-key")
-            provider.chat(
-                messages=[{"role": "user", "content": "hi"}],
-                temperature=0.9,
-            )
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                provider.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    temperature=0.9,
+                )
 
             payload = mock_client.post.call_args[1]["json"]
             assert payload["temperature"] == 0.9
@@ -447,16 +429,15 @@ class TestMinimaxProvider:
         """chat() propagates HTTP errors."""
         import httpx
 
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.minimax.get_registry", return_value=_mock_circuit_breaker()):
+            provider = MinimaxProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_response = MagicMock()
             mock_response.raise_for_status.side_effect = httpx.HTTPError("429 Rate limit")
             mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = MinimaxProvider(api_key="test-key")
-            with pytest.raises(httpx.HTTPError):
-                provider.chat(messages=[{"role": "user", "content": "hi"}])
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                with pytest.raises(httpx.HTTPError):
+                    provider.chat(messages=[{"role": "user", "content": "hi"}])
 
     def test_chat_uses_env_api_key(self) -> None:
         """Uses MINIMAX_API_KEY from environment."""
@@ -465,40 +446,36 @@ class TestMinimaxProvider:
             "model": "MiniMax-M2.7",
             "usage": {},
         }
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_response = MagicMock()
-            mock_response.json.return_value = mock_data
-            mock_client.post.return_value = mock_response
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
+        with patch("blend.providers.minimax.get_registry", return_value=_mock_circuit_breaker()):
             with patch.dict("os.environ", {"MINIMAX_API_KEY": "env-key"}):
                 provider = MinimaxProvider()
-                provider.chat(messages=[{"role": "user", "content": "hi"}])
+                mock_client = MagicMock()
+                mock_response = MagicMock()
+                mock_response.json.return_value = mock_data
+                mock_client.post.return_value = mock_response
+                with patch.object(provider, "_get_client", return_value=mock_client):
+                    provider.chat(messages=[{"role": "user", "content": "hi"}])
 
-            headers = mock_client.post.call_args[1]["headers"]
-            assert "env-key" in headers["Authorization"]
+                headers = mock_client.post.call_args[1]["headers"]
+                assert "env-key" in headers["Authorization"]
 
     def test_chat_stream(self) -> None:
         """chat_stream() returns parsed chunks."""
         mock_lines = [
             'data: {"choices":[{"delta":{"content":"chunk1"}}]}',
-            'data: [DONE]',
+            "data: [DONE]",
         ]
 
-        with patch("httpx.Client") as mock_client_cls:
+        with patch("blend.providers.minimax.get_registry", return_value=_mock_circuit_breaker()):
+            provider = MinimaxProvider(api_key="test-key")
             mock_client = MagicMock()
             mock_stream_response = MagicMock()
             mock_stream_response.status_code = 200
             mock_stream_response.raise_for_status = MagicMock()
             mock_stream_response.iter_lines.return_value = iter(mock_lines)
-            mock_client.stream.return_value.__enter__.return_value = (
-                mock_stream_response
-            )
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-
-            provider = MinimaxProvider(api_key="test-key")
-            chunks = provider.chat_stream(messages=[{"role": "user", "content": "hi"}])
+            mock_client.stream.return_value.__enter__.return_value = mock_stream_response
+            with patch.object(provider, "_get_client", return_value=mock_client):
+                chunks = list(provider.chat_stream(messages=[{"role": "user", "content": "hi"}]))
 
             assert len(chunks) == 1
             assert 'content":"chunk1"' in chunks[0]

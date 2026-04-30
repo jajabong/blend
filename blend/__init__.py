@@ -3,6 +3,8 @@
 Minimax 极致压缩 + Claude 质量保障 + 固定成本.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,6 +13,10 @@ from dotenv import load_dotenv
 _project_root = Path(__file__).parent.parent
 load_dotenv(_project_root / ".env")
 
+from blend.core.orchestrator import BlendOrchestrator, OrchestratorResult  # noqa: E402
+
 __version__ = "2.1.0"
 __author__ = "Blend Team"
 __description__ = "极致成本效率商用 API"
+
+__all__ = ["BlendOrchestrator", "OrchestratorResult"]

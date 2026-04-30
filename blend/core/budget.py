@@ -126,6 +126,7 @@ class ResourceModel:
         "haiku": 1_000_000,
         "sonnet": 1_000_000,
         "opus": 500_000,
+        "gemini": 200_000,
     }
 
     # Monthly costs (CNY)
@@ -133,7 +134,8 @@ class ResourceModel:
         "minimax": 20,
         "haiku": 0,  # Bundled with Sonnet
         "sonnet": 0,  # Bundled
-        "opus": 688,  # Monthly package
+        "opus": 688,  # Monthly package (matches models.yaml)
+        "gemini": 100,  # Estimated per 200k
     }
 
     def __init__(self) -> None:

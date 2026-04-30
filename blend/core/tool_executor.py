@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import logging
 import math
 import re
 import urllib.request
@@ -11,6 +13,78 @@ from typing import Any
 
 class ToolError(Exception):
     """Raised when a tool execution fails."""
+
+
+# -----------------------------------------------------------------------
+# SSRF Protection - Block internal/private IP ranges
+# -----------------------------------------------------------------------
+
+_BLOCKED_IP_RANGES = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.0.2.0/24"),
+    ipaddress.ip_network("198.51.100.0/24"),
+    ipaddress.ip_network("203.0.113.0/24"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("255.255.255.255/32"),
+)
+
+
+def _is_blocked_url(url: str) -> str | None:
+    """Check if URL resolves to a blocked internal IP.
+
+    Returns None if allowed, or an error string if blocked.
+    """
+    try:
+        parsed = urllib.request.urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return f"Only HTTP/HTTPS allowed, got '{parsed.scheme}'"
+
+        host = parsed.hostname
+        if not host:
+            return "Missing hostname in URL"
+
+        # Resolve hostname to IP(s)
+        try:
+            addr_info = urllib.request.urlopen(
+                urllib.request.Request(f"{parsed.scheme}://{host}", method="HEAD"),
+                timeout=3,
+            )
+            # urlopen doesn't give us the resolved IP easily, use socket
+        except Exception as e:
+            logger = logging.getLogger("blend")
+            logger.debug(f"URL open check failed for {host}: {e}")
+
+        # Use socket to resolve and check
+        import socket
+
+        try:
+            resolved_ips = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            return None  # Can't resolve, let it fail naturally
+
+        for family, _, _, _, sockaddr in resolved_ips:
+            ip_str = sockaddr[0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                for blocked_net in _BLOCKED_IP_RANGES:
+                    if ip in blocked_net:
+                        return f"Blocked internal IP range: {ip_str}"
+            except ValueError:
+                continue
+
+        return None
+    except Exception as e:
+        logger = logging.getLogger("blend")
+        logger.debug(f"IP validation failed for {host}: {e}")
+        return None  # On any error, let request proceed (will fail naturally)
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +197,19 @@ def register_mcp_tools(mcp_servers: list[dict[str, Any]]) -> None:
 
 
 def _discover_mcp_tools(command: str, args: list[str], server_name: str) -> None:
-    """Discover and register tools from an MCP server."""
+    """Discover and register tools from an MCP server.
+
+    NOTE: This is a partial implementation. The MCP protocol client
+    spawns the server and performs initial handshake (initialize, tools/list)
+    but the actual tool call routing (_mcp_tool_handler) is a placeholder
+    that echoes arguments rather than making real protocol calls.
+
+    To complete MCP integration:
+    1. Replace _mcp_tool_handler to use the MCP client library
+       (e.g., from mcp import Client; client.call(tool_name, args))
+    2. Maintain a persistent connection per server instead of spawning per discovery
+    3. Handle MCP protocol error responses and reconnection
+    """
     import json
     import subprocess
 
@@ -184,7 +270,11 @@ def _discover_mcp_tools(command: str, args: list[str], server_name: str) -> None
 
 
 def _mcp_tool_handler(server_name: str, tool_name: str) -> Any:
-    """Create a handler that routes tool calls to an MCP server."""
+    """Create a handler that routes tool calls to an MCP server.
+
+    ALPHA: This is a placeholder implementation. The actual MCP protocol
+    call is not yet implemented. Currently returns a JSON echo of args.
+    """
     def handler(arguments: dict[str, Any] | str) -> str:
         """Execute an MCP tool via the MCP server."""
         if isinstance(arguments, dict):
@@ -210,26 +300,81 @@ def _mcp_tool_handler(server_name: str, tool_name: str) -> Any:
 # ---------------------------------------------------------------------------
 
 def _calc_handler(arguments: dict[str, Any] | str) -> str:
-    """Evaluate a safe subset of math expressions."""
+    """Evaluate a safe subset of math expressions using AST parsing (no eval)."""
+    import ast
+    import operator
+
     if isinstance(arguments, dict):
         expr = str(arguments.get("expr", ""))
     else:
         # Legacy: JSON string
         parsed = json.loads(arguments)
         expr = str(parsed.get("expr", ""))
+
     # Only allow safe math operations
     allowed = re.compile(r"^[0-9+\-*/().eE\s]+$")
     if not allowed.match(expr):
         raise ToolError(f"Unsafe expression: {expr}")
+
     try:
-        result = eval(expr, {"__builtins__": {}, "sqrt": math.sqrt, "pi": math.pi, "e": math.e, "pow": pow})
-        return str(result)
-    except Exception as e:
-        raise ToolError(f"Calculation error: {e}")
+        # Parse into AST - this catches syntactic errors before we evaluate
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise ToolError(f"Syntax error: {e}")
+
+    # Define safe operations
+    safe_ops = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.Pow: operator.pow,
+        ast.USub: operator.neg,
+        ast.UAdd: operator.pos,
+    }
+
+    # Constants
+    safe_consts = {
+        "math.pi": math.pi,
+        "math.e": math.e,
+    }
+
+    def eval_node(node: ast.AST) -> float | int:
+        """Recursively evaluate AST node with only safe operations."""
+        match node:
+            case ast.Constant(value=value) if isinstance(value, int):
+                return value  # Preserve int
+            case ast.Constant(value=value) if isinstance(value, float):
+                return value
+            case ast.BinOp(left=left, op=op, right=right) if type(op) in safe_ops:
+                lv = eval_node(left)
+                rv = eval_node(right)
+                try:
+                    result = safe_ops[type(op)](lv, rv)
+                except ZeroDivisionError:
+                    raise ToolError("Calculation error: division by zero")
+                # Preserve int for power of ints with whole result
+                if type(op) is ast.Pow and isinstance(lv, int) and isinstance(rv, int):
+                    return int(result)
+                return result
+            case ast.UnaryOp(op=op, operand=operand) if type(op) in safe_ops:
+                return safe_ops[type(op)](eval_node(operand))
+            case ast.Call(func=func, args=[arg]) if (
+                isinstance(func, ast.Attribute) and
+                func.attr in ("sqrt",) and
+                isinstance(func.value, ast.Name) and
+                func.value.id == "math"
+            ):
+                return getattr(math, func.attr)(eval_node(arg))
+            case _:
+                raise ToolError(f"Unsupported expression node: {ast.dump(node)}")
+
+    result = eval_node(tree.body)
+    return str(result)
 
 
 def _http_handler(arguments: dict[str, Any] | str) -> str:
-    """Make an HTTP request (GET or POST)."""
+    """Make an HTTP request (GET or POST) with SSRF protection."""
     try:
         if isinstance(arguments, dict):
             data = arguments
@@ -248,6 +393,11 @@ def _http_handler(arguments: dict[str, Any] | str) -> str:
 
     if method not in ("GET", "POST", "PUT", "DELETE"):
         raise ToolError(f"Unsupported HTTP method: {method}")
+
+    # SSRF protection: block internal/private IPs
+    blocked_reason = _is_blocked_url(url)
+    if blocked_reason:
+        raise ToolError(f"SSRF blocked: {blocked_reason}")
 
     req = urllib.request.Request(url, method=method)
     for k, v in headers.items():

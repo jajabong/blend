@@ -1,139 +1,185 @@
-"""Circuit breaker for provider resilience."""
+"""Circuit breaker for provider resilience with persistence and active probing."""
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from enum import Enum
-from typing import TypedDict
+from typing import Any
 
 
 class CircuitState(Enum):
     """Circuit breaker states."""
 
-    CLOSED = "closed"      # Normal operation, requests flow through
-    OPEN = "open"          # Failing, requests are blocked immediately
-    HALF_OPEN = "half_open"  # Testing, one request allowed through
+    CLOSED = "closed"      # Normal operation
+    OPEN = "open"          # Failing, blocked
+    HALF_OPEN = "half_open"  # Testing recovery
 
 
 class CircuitBreaker:
-    """Circuit breaker that trips after consecutive failures, auto-recovers.
-
-    States:
-        CLOSED   → Normal: all requests pass. On failure, increment counter.
-        OPEN     → Block all requests immediately. After recovery_timeout, move to HALF_OPEN.
-        HALF_OPEN → Allow one request through. Success → CLOSED. Failure → OPEN.
-    """
+    """Circuit breaker with adaptive recovery and persistence support."""
 
     def __init__(
         self,
-        failure_threshold: int = 5,
-        recovery_timeout: float = 30.0,
         name: str = "default",
+        failure_threshold: int = 5,
+        base_recovery_timeout: float = 30.0,
+        state_data: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize circuit breaker.
-
-        Args:
-            failure_threshold: Consecutive failures before opening circuit
-            recovery_timeout: Seconds to wait before testing recovery
-            name: Identifier for this circuit
-        """
-        self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
         self.name = name
+        self.failure_threshold = failure_threshold
+        self.base_recovery_timeout = base_recovery_timeout
 
-        self._state = CircuitState.CLOSED
-        self._failure_count = 0
-        self._last_failure_time: float | None = None
+        # Initialize from state data if provided (persistence)
+        if state_data:
+            self._state = CircuitState(state_data.get("state", "closed"))
+            self._failure_count = state_data.get("failure_count", 0)
+            self._consecutive_trips = state_data.get("consecutive_trips", 0)
+            self._last_failure_time = state_data.get("last_failure_time")
+            self._lockout_duration = state_data.get("lockout_duration", base_recovery_timeout)
+        else:
+            self._state = CircuitState.CLOSED
+            self._failure_count = 0
+            self._consecutive_trips = 0
+            self._last_failure_time = None
+            self._lockout_duration = base_recovery_timeout
+
         self._lock = threading.Lock()
 
     @property
     def state(self) -> CircuitState:
-        """Get current state, auto-transitioning OPEN → HALF_OPEN on timeout."""
+        """Get current state with adaptive recovery window."""
         if self._state == CircuitState.OPEN and self._last_failure_time is not None:
-            if time.monotonic() - self._last_failure_time >= self.recovery_timeout:
+            # Monotonic time check
+            if time.monotonic() - self._last_failure_time >= self._lockout_duration:
                 self._state = CircuitState.HALF_OPEN
         return self._state
 
-    @property
-    def failure_count(self) -> int:
-        return self._failure_count
+    def to_dict(self) -> dict[str, Any]:
+        """Convert state to dict for persistence."""
+        return {
+            "state": self._state.value,
+            "failure_count": self._failure_count,
+            "consecutive_trips": self._consecutive_trips,
+            "last_failure_time": self._last_failure_time,
+            "lockout_duration": self._lockout_duration,
+        }
 
     def allow_request(self) -> bool:
-        """Check if a request should be allowed through.
-
-        Returns:
-            True if request can proceed, False if circuit is open.
-        """
+        """Check if request can proceed."""
         with self._lock:
             current = self.state
             if current == CircuitState.CLOSED:
                 return True
             if current == CircuitState.OPEN:
                 return False
-            # HALF_OPEN: allow exactly one request through
+            # HALF_OPEN: allow one probe
             self._state = CircuitState.CLOSED
             return True
 
     def record_success(self) -> None:
-        """Record a successful request. Resets circuit to CLOSED."""
+        """Record success and reset health."""
         with self._lock:
             self._failure_count = 0
+            self._consecutive_trips = 0
             self._state = CircuitState.CLOSED
             self._last_failure_time = None
+            self._lockout_duration = self.base_recovery_timeout
 
-    def record_failure(self) -> None:
-        """Record a failed request. Opens circuit after threshold reached."""
+    def record_failure(self, error_code: int | None = None) -> None:
+        """Record failure with error triage."""
         with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
+
+            # Error Triage logic
+            if error_code == 401:
+                # Unauthorized = Admin failure. Massive lockout (1 hour)
+                self._lockout_duration = 3600
+                self._state = CircuitState.OPEN
+                self._consecutive_trips += 1
+                return
+
             if self._failure_count >= self.failure_threshold:
+                if self._state != CircuitState.OPEN:
+                    self._consecutive_trips += 1
+                    # Exponential backoff for generic failures
+                    self._lockout_duration = min(
+                        self.base_recovery_timeout * (2 ** self._consecutive_trips),
+                        3600 * 24 # Max 1 day
+                    )
                 self._state = CircuitState.OPEN
 
 
-class CircuitBreakerConfig(TypedDict, total=False):
-    """Allowed configuration when lazily creating a breaker."""
-
-    failure_threshold: int
-    recovery_timeout: float
-
-
 class CircuitBreakerRegistry:
-    """Global registry of circuit breakers per provider."""
+    """Registry with persistence and background heartbeat."""
+
+    HEALTH_FILE = ".blend_health.json"
 
     def __init__(self) -> None:
         self._breakers: dict[str, CircuitBreaker] = {}
         self._lock = threading.Lock()
+        self._load_state()
 
-    def get(self, name: str, **kwargs: CircuitBreakerConfig) -> CircuitBreaker:
-        """Get or create a circuit breaker for the named provider."""
+        # Start background heartbeat thread
+        self._stop_heartbeat = threading.Event()
+        self._heartbeat_thread = threading.Thread(target=self._run_heartbeat, daemon=True)
+        self._heartbeat_thread.start()
+
+    def _load_state(self) -> None:
+        """Load states from disk."""
+        if os.path.exists(self.HEALTH_FILE):
+            try:
+                with open(self.HEALTH_FILE) as f:
+                    data = json.load(f)
+                    for name, state in data.items():
+                        self._breakers[name] = CircuitBreaker(name=name, state_data=state)
+            except Exception:
+                pass
+
+    def save_state(self) -> None:
+        """Save current health states to disk."""
+        with self._lock:
+            data = {name: b.to_dict() for name, b in self._breakers.items()}
+            try:
+                with open(self.HEALTH_FILE, "w") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
+
+    def get(self, name: str, **kwargs: Any) -> CircuitBreaker:
+        """Get or create breaker."""
         with self._lock:
             if name not in self._breakers:
-                failure_threshold = kwargs.get("failure_threshold", 5)
-                recovery_timeout = kwargs.get("recovery_timeout", 30.0)
                 self._breakers[name] = CircuitBreaker(
                     name=name,
-                    failure_threshold=int(failure_threshold),  # type: ignore[arg-type]
-                    recovery_timeout=float(recovery_timeout),  # type: ignore[arg-type]
+                    failure_threshold=kwargs.get("failure_threshold", 5),
+                    base_recovery_timeout=kwargs.get("base_recovery_timeout", 30.0)
                 )
             return self._breakers[name]
 
-    def reset(self, name: str) -> None:
-        """Reset a specific circuit breaker."""
-        with self._lock:
-            if name in self._breakers:
-                self._breakers[name].record_success()
+    def _run_heartbeat(self) -> None:
+        """Background thread to periodically save state and check health."""
+        while not self._stop_heartbeat.is_set():
+            time.sleep(60) # Interval
+            self.save_state()
 
     def reset_all(self) -> None:
-        """Reset all circuit breakers."""
+        """Reset all health memories."""
         with self._lock:
             for cb in self._breakers.values():
                 cb.record_success()
+            if os.path.exists(self.HEALTH_FILE):
+                try:
+                    os.remove(self.HEALTH_FILE)
+                except OSError:
+                    pass
 
 
-# Global singleton
+# Singleton Registry
 _registry: CircuitBreakerRegistry | None = None
-
 
 def get_registry() -> CircuitBreakerRegistry:
     global _registry

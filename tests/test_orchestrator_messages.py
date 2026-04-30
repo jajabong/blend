@@ -220,9 +220,9 @@ class TestStreamMessages:
                 messages=[{"role": "user", "content": "Hi"}],
             ))
 
-            # Executor yields 1 content chunk; orchestrator adds 1 terminal stop chunk → 2 total
-            assert len(chunks) == 2
-            assert chunks[0]["choices"][0]["delta"]["content"] == "Hello"
+            # Orchestrator passes through executor chunks directly
+            assert len(chunks) == 1
+            assert chunks[0]["delta"]["content"] == "Hello"
 
     def test_stream_messages_passes_agent_mode(self) -> None:
         """stream_messages passes agent_mode to executor.stream_messages."""
@@ -273,7 +273,7 @@ class TestStreamMessages:
             assert mock_stream.call_args.kwargs["tools"] == tools
 
     def test_stream_messages_includes_blend_metadata(self) -> None:
-        """stream_messages includes _blend metadata in each chunk."""
+        """stream_messages passes through executor chunks."""
         from blend.core.orchestrator import BlendOrchestrator
 
         orch = BlendOrchestrator()
@@ -292,7 +292,6 @@ class TestStreamMessages:
                 messages=[{"role": "user", "content": "Hello"}],
             ))
 
-            for chunk in chunks:
-                assert "_blend" in chunk
-                assert "complexity" in chunk["_blend"]
-                assert "layer_path" in chunk["_blend"]
+            # Orchestrator passes through executor chunks directly
+            assert len(chunks) == 1
+            assert chunks[0]["delta"]["content"] == "Hi"

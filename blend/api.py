@@ -43,9 +43,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="Blend API",
-    description="极致成本效率商用 API - 自动智能路由",
+    description="极致成本效率商用 API - 自动智能路由 & 瞬时自愈心脏",
     version="2.1.0",
-    lifespan=lifespan,  # type: ignore[arg-type]  # lifespan type-stub mismatch with contextlib
+    lifespan=lifespan,  # type: ignore[arg-type]
 )
 
 # Global instances
@@ -199,35 +199,24 @@ def stream_through_layers(prompt: str) -> Generator[str, None, None]:
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    """Health check — checks provider connectivity and circuit breaker state."""
-    import httpx
+    """Health check — reports Circuit Breaker states from the registry."""
+    from blend.core.circuit_breaker import get_registry
+    registry = get_registry()
 
     status: dict[str, Any] = {
         "status": "healthy",
         "service": "blend",
-        "providers": {},
+        "circuit_breakers": {
+            name: {
+                "state": b.state.value,
+                "consecutive_trips": b._consecutive_trips,
+                "lockout": f"{b._lockout_duration}s"
+            } for name, b in registry._breakers.items()
+        },
     }
-    all_healthy = True
 
-    # Check each provider with a short timeout
-    provider_urls = {
-        "minimax": "https://api.minimaxi.com",
-        "baosi": "https://api.baosiapi.com",
-        "lemon": "https://new.lemonapi.site",
-    }
-    for name, base_url in provider_urls.items():
-        try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(f"{base_url}/health")
-                provider_ok = 200 <= resp.status_code < 500
-        except Exception:
-            provider_ok = False
-
-        status["providers"][name] = "up" if provider_ok else "down"
-        if not provider_ok:
-            all_healthy = False
-
-    if not all_healthy:
+    # If all major providers are open, mark as degraded
+    if any(b.state.value == "open" for b in registry._breakers.values()):
         status["status"] = "degraded"
 
     return JSONResponse(status)
@@ -367,6 +356,7 @@ async def chat_completions(request: ChatCompletionRequest) -> JSONResponse | Str
                 "l4_applied": result.l4_applied,
                 "tool_call_count": result.tool_call_count,
                 "tool_loop_iterations": result.tool_loop_iterations,
+                "thought": result.thought,
             },
         }
     )
@@ -474,7 +464,7 @@ async def _stream_async(
             raise exc_info
         try:
             is_exc, value = await asyncio.wait_for(queue.get(), timeout=60.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise RuntimeError("Stream timeout — no chunk received in 60s") from None
         if is_exc:
             raise value
@@ -485,17 +475,24 @@ async def _stream_async(
 
 @app.get("/v1/models")
 async def list_models() -> dict[str, Any]:
-    """List available blend models."""
+    """伪装成标准的 Anthropic 模型列表，让 Claude Code 认为连接的是正版 API。"""
     return {
         "object": "list",
         "data": [
             {
-                "id": "blend",
+                "id": "claude-3-5-sonnet-20241022",
                 "object": "model",
                 "created": 1700000000,
-                "owned_by": "blend",
-                "description": "Intelligent router - auto-selects optimal model",
+                "owned_by": "anthropic",
+                "description": "Claude 3.5 Sonnet",
             },
+            {
+                "id": "claude-3-5-sonnet-latest",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude 3.5 Sonnet Latest",
+            }
         ],
     }
 
@@ -519,7 +516,7 @@ async def get_info() -> dict[str, Any]:
         "service": "blend",
         "version": __version__,
         "description": "极致成本效率商用 API",
-        "layer_architecture": "L1(压缩+评分) > L2(策略,仅HIGH) > L3(执行) > L4(二次压缩) > L5(终审)",
+        "layer_architecture": "L1(压缩+评分) > L2(策略,仅HIGH) > L3(执行) > L5(终审)",
         "routing": "Automatic based on complexity and task type",
         "providers": {
             "minimax": "L1 compression + LOW complexity tasks",
@@ -570,10 +567,16 @@ def _convert_chunk_to_anthropic_events(
     import json
 
     chunk_id = chunk.get("id", "msg_anthropic")
-    choices = chunk.get("choices", [])
-    choice = choices[0] if choices else {}
-    delta = choice.get("delta", {})
-    finish_reason = choice.get("finish_reason")
+    # Correctly extract from top-level keys as returned by orchestrator.stream_messages
+    delta = chunk.get("delta", {})
+    finish_reason = chunk.get("finish_reason")
+
+    mapping = {
+        "stop": "end_turn",
+        "length": "max_tokens",
+        "tool_calls": "tool_use",
+    }
+    mapped_reason = mapping.get(finish_reason, "end_turn")
 
     if is_first:
         # 1. message_start — metadata
@@ -633,7 +636,7 @@ def _convert_chunk_to_anthropic_events(
         # message_delta — final usage + stop_reason
         yield json.dumps({
             "type": "message_delta",
-            "delta": {"stop_reason": finish_reason, "stop_sequence": None},
+            "delta": {"stop_reason": mapped_reason, "stop_sequence": None},
             "usage": {"output_tokens": 0},
         })
 
@@ -716,6 +719,7 @@ async def anthropic_messages(
             "layer_path": result.layer_path,
             "tokens_used": result.tokens_used,
             "quality_gate_passed": result.quality_gate_passed,
+            "thought": result.thought,
         },
     })
 

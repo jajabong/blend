@@ -5,40 +5,6 @@ from unittest.mock import MagicMock
 from blend.core.orchestrator import BlendOrchestrator
 
 
-class TestOrchestratorSmartCompress:
-    """Test _smart_compress method."""
-
-    def test_smart_compress_short_prompt(self) -> None:
-        """Short prompt skips compression."""
-        orchestrator = BlendOrchestrator()
-
-        should_compress, result = orchestrator._smart_compress("Hi", 1)
-        assert should_compress is False
-        assert result is None
-
-    def test_smart_compress_long_prompt_is_noop(self) -> None:
-        """Long prompt does NOT trigger compression (L1 removed in Phase 1)."""
-        orchestrator = BlendOrchestrator()
-        long_prompt = (
-            "Write a comprehensive Python guide covering syntax basics, data structures like lists and dictionaries, "
-            "control flow with loops and conditionals, functions with parameters and return values, object-oriented "
-            "programming with classes and inheritance, module imports, exception handling, file I/O operations, "
-            "testing with pytest, debugging techniques, and performance optimization tips. Include practical examples "
-            "for each topic demonstrating best practices and common pitfalls to avoid in production code."
-        )
-        should_compress, result = orchestrator._smart_compress(long_prompt, 7)
-        assert should_compress is False
-        assert result is None
-
-    def test_smart_compress_medium_prompt_skips(self) -> None:
-        """Medium length prompt (200-300 chars) skips compression."""
-        orchestrator = BlendOrchestrator()
-
-        should_compress, result = orchestrator._smart_compress("x" * 250, 5)
-        assert should_compress is False
-        assert result is None
-
-
 class TestOrchestratorMessagesToPrompt:
     """Test _messages_to_prompt method."""
 
@@ -122,11 +88,11 @@ class TestOrchestratorStream:
             compressed_length=4,
         )
 
-        orchestrator.strategy_gen = MagicMock()
+        orchestrator.strategy = MagicMock()
         mock_output = MagicMock()
         mock_output.plan = ["Step 1", "Step 2"]
         mock_output.estimated_tokens = 50
-        orchestrator.strategy_gen.generate.return_value = mock_output
+        orchestrator.strategy.generate.return_value = mock_output
 
         orchestrator.executor = MagicMock()
         orchestrator.executor.stream.return_value = iter(["Result"])
@@ -138,9 +104,8 @@ class TestOrchestratorStream:
 
         list(orchestrator.stream("Complex prompt"))
         # Verify strategy was generated
-        orchestrator.strategy_gen.generate.assert_called_once()
-        # Verify resource tracking happened
-        orchestrator.resource_model.track_consumption.assert_called()
+        orchestrator.strategy.generate.assert_called_once()
+        # stream() passes through to executor without resource tracking
 
     def test_stream_with_long_prompt(self) -> None:
         """Long prompt may trigger compression."""

@@ -1,6 +1,12 @@
-"""L5 Verification Layer - Graded Quality Gate for Output Verification."""
+"""L5 Verification Layer - Graded Quality Gate for Output Verification.
+
+Note: L5 is the final (4th) layer in the actual 4-layer architecture:
+  L1 (Entry) → L2 (Strategy) → L3 (Execute) → L5 (Verify)
+L4 was removed due to negative ROI (+18s latency for $0.003 savings).
+"""
 
 from dataclasses import dataclass
+
 try:
     from enum import StrEnum
 except ImportError:
@@ -62,15 +68,17 @@ class QualityVerifier:
         "gho_",
     ]
 
-    # P0 vulnerability patterns
+    # P0 vulnerability patterns (regex-style inspired)
     VULN_PATTERNS = [
-        "eval(",
-        "exec(",
-        "os.system",
-        "subprocess(",
-        "SELECT * FROM",
-        "DROP TABLE",
-        "DELETE FROM",
+        r"eval\s*\(",
+        r"exec\s*\(",
+        r"os\.system\s*\(",
+        r"subprocess\.",
+        r"getattr\s*\(.*\b__",
+        r"__import__",
+        r"SELECT\s+.*\s+FROM\s+",
+        r"DROP\s+TABLE\s+",
+        r"DELETE\s+FROM\s+",
     ]
 
     # Code security patterns (redteam-style)
@@ -108,7 +116,7 @@ class QualityVerifier:
         gemini_used: bool = False,
         gemini_context_percent: float = 0,
         output_tokens: int = 0,
-        l4_applied: bool = True,
+        l4_applied: bool = False,
         model_name: str | None = None,
         expected_path: str | None = None,
         task_type: str = "general",
@@ -140,8 +148,11 @@ class QualityVerifier:
         # Gate 2: Format compliant - check structural validity
         gates[QualityGate.FORMAT_COMPLIANT] = self._check_format_compliance(output)
 
-        # Gate 3: No P0 vulnerability
-        gates[QualityGate.NO_P0_VULN] = not self._contains_vuln(output) if not skip_p0_check else True
+        # Gate 3: No P0 vulnerability (Critical) - skip if agent_mode
+        if skip_p0_check:
+            gates[QualityGate.NO_P0_VULN] = True
+        else:
+            gates[QualityGate.NO_P0_VULN] = not self._contains_vuln(output)
 
         # Gate 4: No hardcoded secrets
         gates[QualityGate.NO_HARDCODED_SECRETS] = not self._contains_secret(output)
@@ -152,11 +163,9 @@ class QualityVerifier:
         else:
             gates[QualityGate.GEMINI_BATCH_THRESHOLD] = True
 
-        # Gate 6: L4 applied if needed (>1000 tokens, aligned with CompressionTrigger threshold)
-        if output_tokens > 1000:
-            gates[QualityGate.L4_APPLIED_IF_NEEDED] = l4_applied
-        else:
-            gates[QualityGate.L4_APPLIED_IF_NEEDED] = True
+        # Gate 6: L4 applied if needed
+        # Note: L4 removed in v2.0 - this gate always passes
+        gates[QualityGate.L4_APPLIED_IF_NEEDED] = True
 
         # Gate 7: Model full name
         if model_name:
@@ -342,9 +351,12 @@ class QualityVerifier:
         return False
 
     def _contains_vuln(self, text: str) -> bool:
-        """Check for P0 vulnerabilities."""
-        text_lower = text.lower()
-        return any(pattern in text_lower for pattern in self.VULN_PATTERNS)
+        """Check for P0 vulnerabilities using regex."""
+        import re
+        for pattern in self.VULN_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+        return False
 
     def _is_full_model_name(self, model_name: str) -> bool:
         """Check if model name is valid (short or full name accepted)."""

@@ -6,6 +6,16 @@ from unittest.mock import MagicMock, patch
 from blend.core.executor import Executor
 
 
+def _mock_circuit_breaker():
+    """Return a mock circuit breaker that allows all requests."""
+    mock_breaker = MagicMock()
+    mock_breaker.allow_request.return_value = True
+    mock_breaker.state = MagicMock(value="closed")
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_breaker
+    return mock_registry
+
+
 class MockResponse:
     """Mock response object."""
 
@@ -21,67 +31,72 @@ class TestModelSelection:
 
     def test_select_haiku_for_low_complexity(self) -> None:
         """Low complexity (1-2) should select Haiku (Tier 1)."""
-        executor = Executor()
-        selection = executor._select_model(2, "general")
-        assert selection.primary == "haiku"
+        with patch("blend.core.circuit_breaker.get_registry", return_value=_mock_circuit_breaker()):
+            executor = Executor()
+            selection = executor._select_model(2, "general")
+            assert selection.primary == "haiku"
 
     def test_select_haiku_for_medium_complexity(self) -> None:
         """Medium complexity (4-7) should select Haiku or Sonnet when budget available."""
-        executor = Executor()
-        with patch.object(executor, "_check_budget_status") as mock_budget:
-            mock_budget.return_value = {
-                "minimax": 100000,
-                "haiku": 100000,
-                "sonnet": 100000,
-                "opus": 100000,
-                "gemini": 100000,
-            }
-            # complexity 7 hits sonnet path when sonnet budget > 1000
-            selection = executor._select_model(7, "general")
-            assert selection.primary in ["sonnet", "haiku"]
+        with patch("blend.core.circuit_breaker.get_registry", return_value=_mock_circuit_breaker()):
+            executor = Executor()
+            with patch.object(executor, "_check_budget_status") as mock_budget:
+                mock_budget.return_value = {
+                    "minimax": 100000,
+                    "haiku": 100000,
+                    "sonnet": 100000,
+                    "opus": 100000,
+                    "gemini": 100000,
+                }
+                # complexity 7 hits sonnet path when sonnet budget > 1000
+                selection = executor._select_model(7, "general")
+                assert selection.primary in ["sonnet", "haiku"]
 
     def test_gemini_for_deep_reasoning(self) -> None:
         """Deep reasoning tasks should select Gemini."""
-        executor = Executor()
-        with patch.object(executor, "_check_budget_status") as mock_budget:
-            mock_budget.return_value = {
-                "minimax": 100000,
-                "haiku": 100000,
-                "sonnet": 100000,
-                "opus": 100000,
-                "gemini": 100000,
-            }
-            selection = executor._select_model(3, "deep_reasoning")
-            assert selection.primary in ["gemini", "sonnet"]
+        with patch("blend.core.circuit_breaker.get_registry", return_value=_mock_circuit_breaker()):
+            executor = Executor()
+            with patch.object(executor, "_check_budget_status") as mock_budget:
+                mock_budget.return_value = {
+                    "minimax": 100000,
+                    "haiku": 100000,
+                    "sonnet": 100000,
+                    "opus": 100000,
+                    "gemini": 100000,
+                }
+                selection = executor._select_model(3, "deep_reasoning")
+                assert selection.primary in ["gemini", "sonnet"]
 
     def test_code_tasks_use_claude(self) -> None:
         """Code tasks should use Claude (not Gemini)."""
-        executor = Executor()
-        with patch.object(executor, "_check_budget_status") as mock_budget:
-            mock_budget.return_value = {
-                "minimax": 100000,
-                "haiku": 100000,
-                "sonnet": 100000,
-                "opus": 100000,
-                "gemini": 100000,
-            }
-            selection = executor._select_model(5, "code")
-            assert selection.primary in ["haiku", "sonnet", "minimax"]
+        with patch("blend.core.circuit_breaker.get_registry", return_value=_mock_circuit_breaker()):
+            executor = Executor()
+            with patch.object(executor, "_check_budget_status") as mock_budget:
+                mock_budget.return_value = {
+                    "minimax": 100000,
+                    "haiku": 100000,
+                    "sonnet": 100000,
+                    "opus": 100000,
+                    "gemini": 100000,
+                }
+                selection = executor._select_model(5, "code")
+                assert selection.primary in ["haiku", "sonnet", "minimax"]
 
     def test_fallback_chain(self) -> None:
         """Executor should have fallback chain."""
-        executor = Executor()
-        with patch.object(executor, "_check_budget_status") as mock_budget:
-            mock_budget.return_value = {
-                "minimax": 100000,
-                "haiku": 100000,
-                "sonnet": 100000,
-                "opus": 100000,
-                "gemini": 100000,
-            }
-            selection = executor._select_model(8, "general")
-            assert selection.primary in ["sonnet", "haiku", "minimax"]
-            assert isinstance(selection.fallback, list)
+        with patch("blend.core.circuit_breaker.get_registry", return_value=_mock_circuit_breaker()):
+            executor = Executor()
+            with patch.object(executor, "_check_budget_status") as mock_budget:
+                mock_budget.return_value = {
+                    "minimax": 100000,
+                    "haiku": 100000,
+                    "sonnet": 100000,
+                    "opus": 100000,
+                    "gemini": 100000,
+                }
+                selection = executor._select_model(8, "general")
+                assert selection.primary in ["sonnet", "haiku", "minimax"]
+                assert isinstance(selection.fallback, list)
 
 
 class TestExecutor:

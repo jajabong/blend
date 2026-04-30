@@ -1,118 +1,81 @@
-# Blend 模型配置
-# 模型选择、层级映射、Fallback 链、成本参数
+# Blend 终极统筹精算配置 (v2.3.0)
+# 核心原则：短回答走 Baosi(按量)，长回答走 Lemon(按次)，兜底走 Minimax(免费)
 
-# 模型层级定义
 tiers:
-  # L1/L4: 压缩层（Minimax）
-  minimax:
-    provider: MinimaxProvider
-    model_name: "MiniMax-M2.7"
-    tier: L1_L4
-    cost_per_1k: 0.001
-    budget_monthly: null  # 无限 Token
-    fallback: []
-
-  # L3 轻量执行（Haiku）
+  # --- Baosi (按 Token 计费: 适合精准、短回答) ---
   haiku:
     provider: BaosiProvider
     model_name: "claude-haiku-4-5-20251001"
     tier: L3_LIGHT
     cost_per_1k: 0.003
-    budget_monthly: 200000  # Claude 套餐共享
-    fallback:
-      - minimax
+    fallback: [gemini, minimax]
 
-  # L3 主执行（Sonnet）
   sonnet:
     provider: BaosiProvider
     model_name: "claude-sonnet-4-6"
     tier: L3_MAIN
     cost_per_1k: 0.015
-    budget_monthly: 200000  # Claude 套餐共享
-    fallback:
-      - haiku
-      - minimax
+    fallback: [gemini_pro, gemini, minimax]
 
-  # L2/L5 HIGH: 策略层（Opus）
   opus:
     provider: BaosiProvider
     model_name: "claude-opus-4-7"
     tier: L2_L5_HIGH
     cost_per_1k: 0.075
-    budget_monthly: 200000  # Claude 套餐共享
-    l2_token_limit: 300
-    fallback:
-      - sonnet
-      - haiku
-      - minimax
+    fallback: [gemini_pro_ultra, sonnet]
 
-  # L3 批量推理（Gemini Flash）
+  # --- Lemon (按次计费: 适合长文、重型推理、画图) ---
   gemini:
     provider: LemonProvider
     model_name: "[L]gemini-3-flash-preview"
     tier: L3_BATCH
-    cost_per_1k: 0.005
-    budget_monthly: null  # 按次计费，长期有效
-    min_batch_threshold: 0.5  # 单次调用需 ≥50% 上下文上限
-    fallback:
-      - minimax
+    cost_per_1k: 0.0014 # 映射 1.4 额度
+    fallback: [minimax]
 
-  # L3 批量推理 Pro（Gemini Pro）
   gemini_pro:
     provider: LemonProvider
     model_name: "[L]gemini-3-pro-preview"
     tier: L3_BATCH_PRO
-    cost_per_1k: 0.01
-    budget_monthly: null
-    min_batch_threshold: 0.5
-    fallback:
-      - gemini
-      - minimax
+    cost_per_1k: 0.00875 # 按次 8.75 额度
+    fallback: [gemini_pro_ultra, minimax]
+      
+  gemini_pro_ultra:
+    provider: LemonProvider
+    model_name: "[L]gemini-3.1-pro-preview"
+    tier: L2_L5_HIGH
+    cost_per_1k: 0.0105 # 按次 10.5 额度
+    fallback: [minimax]
 
-# 复杂度 → 模型映射
+  gemini_image_flash:
+    provider: LemonProvider
+    model_name: "[L]gemini-3.1-flash-image-preview"
+    tier: SPECIALIZED
+    cost_per_1k: 0.031 # 映射 31 额度
+
+  gemini_image_pro:
+    provider: LemonProvider
+    model_name: "[L]gemini-3-pro-image-preview"
+    tier: SPECIALIZED
+    cost_per_1k: 0.085 # 映射 85 额度
+
+  # --- Minimax (基础代谢: 几乎免费) ---
+  minimax:
+    provider: MinimaxProvider
+    model_name: "MiniMax-M2.7"
+    tier: L1_L4
+    cost_per_1k: 0.001
+
+# 统筹逻辑路由
 complexity_routing:
-  # 复杂度 1-3: Minimax 直通
   low:
-    primary: minimax
-    description: "简单任务，Minimax 直通，用满无限 Token"
-
-  # 复杂度 4-5: Haiku
-  medium_low:
     primary: haiku
-    description: "中等任务，Haiku 性价比最优"
-
-  # 复杂度 6-7: Sonnet
-  medium_high:
+  medium:
     primary: sonnet
-    description: "中高任务，Sonnet 标准执行"
-
-  # 复杂度 8-10: Sonnet（Opus 仅做 L2 策略）
   high:
-    primary: sonnet
-    description: "高复杂度，Sonnet 执行，Opus 仅做 L2 策略"
+    primary: gemini_pro_ultra
 
-# Gemini 任务类型路由
+# 专项任务强制路由
 gemini_task_types:
   - deep_reasoning
-  - tool_call
+  - image_generation
   - multimodal
-gemini_task_types_description: "Gemini 仅承接以上类型，其他任务不接"
-
-# 资源警戒线
-resource_warnings:
-  claude_usage_threshold: 0.9    # Claude 套餐消耗 >90% 触发降级
-  gemini_min_threshold: 0.5      # Gemini 单次 <50% 上限拒绝调用
-  sonnet_budget: 100
-  haiku_budget: 100
-  minimax_budget: 50
-
-# 降级策略
-degradation:
-  trigger: "claude_usage_threshold"
-  rules:
-    - from: sonnet
-      to: haiku
-    - from: haiku
-      to: minimax
-    - from: opus
-      to: sonnet

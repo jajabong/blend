@@ -1,5 +1,6 @@
 """L3 Execution Layer - Dynamic Model Selection based on Complexity and Task Type."""
 
+import concurrent.futures
 import json
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -47,16 +48,18 @@ class LLMOutput:
     quality_gate_passed: bool
     finish_reason: str = "stop"
     tool_calls: list[dict[str, Any]] | None = None
+    thought: str | None = None
 
 
 def _get_provider(model_key: str) -> tuple["LLMProvider", str]:
     """Get provider instance and model name for a model key."""
     from blend.providers import BaosiProvider, LemonProvider, MinimaxProvider
 
-    if model_key not in MODEL_MAP:
+    current_map = get_model_map()
+    if model_key not in current_map:
         model_key = "haiku"
 
-    provider_class_name, model_name = MODEL_MAP[model_key]
+    provider_class_name, model_name = current_map[model_key]
 
     if provider_class_name == "MinimaxProvider":
         return MinimaxProvider(), model_name  # type: ignore[return-value]
@@ -80,53 +83,79 @@ class Executor:
         strategy: dict[str, object] | None = None,
         task_type: str = "general",
     ) -> L3Output:
-        """Execute prompt with appropriate model.
-
-        Args:
-            prompt: The compressed prompt to execute
-            complexity: Complexity score (1-10)
-            strategy: Optional L2 strategy for HIGH complexity
-            task_type: Task type for model routing
-
-        Returns:
-            L3Output with execution results
-        """
-        # Select model based on complexity, task type, and budget
+        """Execute prompt with appropriate model. Supports Racing Fallback."""
         selection = self._select_model(complexity, task_type)
+        candidates = [selection.primary] + selection.fallback
 
-        # Try primary model, then fallback chain
-        raw_output = None
-        model_used = None
-        usage: int | None = None
-        for model_key in [selection.primary] + selection.fallback:
-            try:
-                response = self._call_model(model=model_key, prompt=prompt, strategy=strategy)
-                raw_output = response.content
-                model_used = model_key
-                usage = self._extract_usage(response)
-                break
-            except Exception:
-                continue
+        def _try_one(m_key: str, is_p: bool) -> L3Output:
+            timeout = 120.0 if is_p else 15.0
+            response = self._call_model(model=m_key, prompt=prompt, strategy=strategy, timeout=timeout)
 
-        # If all models failed, use minimax as last resort
-        if raw_output is None:
-            response = self._call_model(model="minimax", prompt=prompt)
             raw_output = response.content
-            model_used = "minimax"
-            usage = self._extract_usage(response)
+            tokens_used = self._extract_usage(response) or self._estimate_tokens(raw_output)
+            budget = self._get_budget(m_key)
 
-        # model_used is guaranteed non-None here
-        assert model_used is not None
-        tokens_used = usage if usage else self._estimate_tokens(raw_output)
-        budget = self._get_budget(model_used)
-        remaining = max(0, budget - tokens_used)
+            return L3Output(
+                raw_output=raw_output,
+                model_used=m_key,
+                tokens_used=tokens_used,
+                tokens_budget_remaining=max(0, budget - tokens_used),
+                quality_gate_passed=True,
+                thought=getattr(response, "thought", None),
+            )
 
+        # Implementation of Racing Fallback
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+            futures = {}
+            # Submit primary
+            futures[pool.submit(_try_one, candidates[0], True)] = candidates[0]
+
+            # Wait a short "probe" interval for primary
+            done, not_done = concurrent.futures.wait(list(futures.keys()), timeout=3.0)
+
+            if done:
+                try:
+                    return list(done)[0].result()
+                except Exception:
+                    pass # Fall through to start fallback
+
+            # Primary is slow or failed, fire second choice if exists
+            if len(candidates) > 1:
+                futures[pool.submit(_try_one, candidates[1], False)] = candidates[1]
+
+            # Final race between primary and fallback
+            while futures:
+                done, not_done = concurrent.futures.wait(
+                    list(futures.keys()),
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for f in done:
+                    try:
+                        result = f.result()
+                        # Success! Cancel others and return
+                        for nf in futures:
+                            if nf != f:
+                                nf.cancel()
+                        return result
+                    except Exception:
+                        # This candidate failed, remove it
+                        del futures[f]
+                        # If we have more candidates in the YAML chain, we could add them here
+                        # But for now we stick to Top 2 for the race.
+
+                if not futures:
+                    break
+
+        # Last resort fallback if everything in the race failed
+        # Just use minimax synchronously
+        response = self._call_model(model="minimax", prompt=prompt)
         return L3Output(
-            raw_output=raw_output,
-            model_used=model_used,
-            tokens_used=tokens_used,
-            tokens_budget_remaining=remaining,
+            raw_output=response.content,
+            model_used="minimax",
+            tokens_used=self._estimate_tokens(response.content),
+            tokens_budget_remaining=0,
             quality_gate_passed=True,
+            thought=getattr(response, "thought", None),
         )
 
     def execute_messages(
@@ -145,43 +174,16 @@ class Executor:
         frequency_penalty: float | None = None,
         stop: str | list[str] | None = None,
     ) -> LLMOutput:
-        """Execute with full message list and optional tool/format parameters."""
+        """Execute with full message list. Supports Racing Fallback."""
         selection = self._select_model(complexity, task_type)
+        candidates = [selection.primary] + selection.fallback
 
-        raw_output = None
-        model_used = None
-        finish_reason = "stop"
-        tool_calls: list[dict[str, Any]] | None = None
-
-        for model_key in [selection.primary] + selection.fallback:
-            try:
-                result = self._call_model_messages(
-                    model=model_key,
-                    messages=messages,
-                    strategy=strategy,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    response_format=response_format,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    presence_penalty=presence_penalty,
-                    frequency_penalty=frequency_penalty,
-                    stop=stop,
-                )
-                raw_output = result.content
-                finish_reason = result.finish_reason
-                tool_calls = result.tool_calls
-                model_used = model_key
-                break
-            except Exception:
-                continue
-
-        if raw_output is None:
-            result = self._call_model_messages(
-                model="minimax",
+        def _try_one(m_key: str, is_p: bool) -> LLMOutput:
+            timeout = 120.0 if is_p else 15.0
+            return self._call_model_messages(
+                model=m_key,
                 messages=messages,
-                strategy=None,
+                strategy=strategy,
                 tools=tools,
                 tool_choice=tool_choice,
                 response_format=response_format,
@@ -191,75 +193,78 @@ class Executor:
                 presence_penalty=presence_penalty,
                 frequency_penalty=frequency_penalty,
                 stop=stop,
+                timeout=timeout,
             )
-            raw_output = result.content
-            finish_reason = result.finish_reason
-            tool_calls = result.tool_calls
-            model_used = "minimax"
 
-        assert model_used is not None
-        tokens_used = self._estimate_tokens(raw_output)
-        budget = self._get_budget(model_used)
-        remaining = max(0, budget - tokens_used)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {pool.submit(_try_one, candidates[0], True): candidates[0]}
 
-        return LLMOutput(
-            content=raw_output,
-            model_used=model_used,
-            tokens_used=tokens_used,
-            tokens_budget_remaining=remaining,
-            quality_gate_passed=True,
-            finish_reason=finish_reason,
-            tool_calls=tool_calls,
-        )
+            # Wait 3s for primary
+            done, _ = concurrent.futures.wait(list(futures.keys()), timeout=3.0)
+            if done:
+                try:
+                    return list(done)[0].result()
+                except Exception:
+                    pass
+
+            if len(candidates) > 1:
+                futures[pool.submit(_try_one, candidates[1], False)] = candidates[1]
+
+            while futures:
+                done, _ = concurrent.futures.wait(list(futures.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                for f in done:
+                    try: return f.result()
+                    except Exception: del futures[f]
+                if not futures:
+                    break
+
+        # Last resort
+        return _try_one("minimax", False)
 
     def _select_model(
         self,
         complexity: int,
         task_type: str,
     ) -> ModelSelection:
-        """Select model based on complexity, task type, and budget.
-
-        Args:
-            complexity: Complexity score (1-10)
-            task_type: Task type for routing
-
-        Returns:
-            ModelSelection with primary and fallback models
-        """
-        # Check budget availability and apply budget-aware routing
+        """Select model based on health, complexity, and task type."""
         budget_status = self._check_budget_status()
+        current_map = get_model_map()
+        current_fallbacks = get_fallback_chain()
+        gemini_types = get_gemini_task_types()
 
-        # Gemini for hard-core tasks (deep reasoning, tool call, multimodal)
-        if task_type in GEMINI_TASK_TYPES:
-            if budget_status["gemini"] > 1000:
-                return ModelSelection(primary="gemini", fallback=["minimax"])
-            return ModelSelection(primary="sonnet", fallback=["haiku", "minimax"])
+        # 1. Determine Initial Intent
+        primary = "haiku"
+        if task_type in gemini_types:
+            primary = "gemini"
+        elif task_type == "code":
+            primary = "sonnet" if complexity >= 5 else "haiku"
+        elif complexity <= 2:
+            primary = "haiku" if budget_status["haiku"] > 0 else "minimax"
+        elif complexity <= 4:
+            primary = "sonnet" if budget_status["sonnet"] > 100 else "haiku"
+        else:
+            primary = "sonnet"
 
-        # Budget-aware routing - complexity drives model, budget determines availability
-        # Thresholds match scorer._determine_tier: LOW≤2, MEDIUM≤5, HIGH≥6
-        if complexity <= 2:
-            # Tier 1 (complexity 1-2): Haiku primary — 90% Sonnet quality at 1/3 cost
-            if budget_status["haiku"] >= 50:
-                return ModelSelection(primary="haiku", fallback=[])
-            return ModelSelection(primary="minimax", fallback=[])
+        # 2. Health-Aware Routing
+        from blend.core.circuit_breaker import CircuitState, get_registry
+        registry = get_registry()
 
-        if complexity <= 5:
-            # Medium complexity: haiku or sonnet
-            if budget_status["sonnet"] > 100:
-                return ModelSelection(
-                    primary="sonnet",
-                    fallback=["haiku", "minimax"],
-                )
-            elif budget_status["haiku"] >= 50:
-                return ModelSelection(primary="haiku", fallback=["minimax"])
-            return ModelSelection(primary="minimax", fallback=[])
+        def is_healthy(m_key: str) -> bool:
+            p_class, _ = current_map.get(m_key, ("BaosiProvider", ""))
+            p_name = "baosi" if "Baosi" in p_class else ("lemon" if "Lemon" in p_class else "minimax")
+            return registry.get(p_name).state != CircuitState.OPEN
 
-        # High complexity (6-10): sonnet
-        if budget_status["sonnet"] > 100:
-            return ModelSelection(primary="sonnet", fallback=["haiku", "minimax"])
-        elif budget_status["haiku"] >= 50:
-            return ModelSelection(primary="haiku", fallback=["minimax"])
-        return ModelSelection(primary="minimax", fallback=[])
+        candidates = [primary] + current_fallbacks.get(primary, [])
+        final_primary = "minimax"
+        for cand in candidates:
+            if is_healthy(cand):
+                final_primary = cand
+                break
+
+        return ModelSelection(
+            primary=final_primary,
+            fallback=current_fallbacks.get(final_primary, ["minimax"])
+        )
 
     def _check_budget_status(self) -> dict[str, int]:
         """Check budget remaining for all models."""
@@ -276,24 +281,22 @@ class Executor:
         model: str,
         prompt: str,
         strategy: dict[str, object] | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """Call the selected model via provider, returning full LLMResponse."""
         provider, model_name = _get_provider(model)
+        if timeout and hasattr(provider, '_timeout'):
+            provider._timeout = timeout
 
-        # Inject L2 strategy into prompt if available
         plan = strategy.get("plan") if strategy else None
         if plan and isinstance(plan, (list, tuple)):
             plan_text = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(plan))
             system_prompt = L2_STRATEGY_SYSTEM_TEMPLATE.format(plan_text=plan_text)
-            messages: list[dict[str, str]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ]
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
         else:
             messages = [{"role": "user", "content": prompt}]
 
-        response = provider.chat(messages=messages, model=model_name)
-        return response
+        return provider.chat(messages=messages, model=model_name)
 
     def _call_model_messages(
         self,
@@ -309,11 +312,13 @@ class Executor:
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
         stop: str | list[str] | None = None,
+        timeout: float | None = None,
     ) -> LLMOutput:
-        """Call model with full message list and optional tool/format params."""
+        """Call selected model with messages and full parameter suite."""
         provider, model_name = _get_provider(model)
+        if timeout and hasattr(provider, '_timeout'):
+            provider._timeout = timeout
 
-        # Inject L2 strategy as system message
         msgs = list(messages)
         plan = strategy.get("plan") if strategy else None
         if plan and isinstance(plan, (list, tuple)):
@@ -322,24 +327,15 @@ class Executor:
             msgs = [{"role": "system", "content": system_prompt}] + msgs
 
         kwargs: dict[str, Any] = {}
-        if tools:
-            kwargs["tools"] = tools
-        if tool_choice:
-            kwargs["tool_choice"] = tool_choice
-        if response_format:
-            kwargs["response_format"] = response_format
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-        if temperature != 1.0:
-            kwargs["temperature"] = temperature
-        if top_p is not None:
-            kwargs["top_p"] = top_p
-        if presence_penalty is not None:
-            kwargs["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            kwargs["frequency_penalty"] = frequency_penalty
-        if stop is not None:
-            kwargs["stop"] = stop
+        if tools: kwargs["tools"] = tools
+        if tool_choice: kwargs["tool_choice"] = tool_choice
+        if response_format: kwargs["response_format"] = response_format
+        if max_tokens is not None: kwargs["max_tokens"] = max_tokens
+        if temperature != 1.0: kwargs["temperature"] = temperature
+        if top_p is not None: kwargs["top_p"] = top_p
+        if presence_penalty is not None: kwargs["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None: kwargs["frequency_penalty"] = frequency_penalty
+        if stop is not None: kwargs["stop"] = stop
 
         response: LLMResponse = provider.chat(messages=msgs, model=model_name, **kwargs)
         return LLMOutput(
@@ -350,41 +346,25 @@ class Executor:
             quality_gate_passed=True,
             finish_reason=response.finish_reason if hasattr(response, "finish_reason") else "stop",
             tool_calls=response.tool_calls if hasattr(response, "tool_calls") else None,
+            thought=getattr(response, "thought", None),
         )
 
     def _extract_usage(self, response: LLMResponse) -> int | None:
-        """Extract token count from LLMResponse usage dict.
-
-        Supports both OpenAI-style {'completion_tokens': N} and
-        Minimax-style {'completion_tokens': N} dicts.
-        """
+        """Extract completion token count from LLMResponse."""
         usage = response.usage
-        if not usage:
-            return None
-        if isinstance(usage, dict):
-            return usage.get("completion_tokens") or usage.get("total_tokens")
-        return None
+        if not usage or not isinstance(usage, dict): return None
+        return usage.get("completion_tokens") or usage.get("total_tokens")
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count (rough: ~4 chars per token)."""
+        """Estimate token count."""
         return len(text) // 4
 
     def _get_budget(self, model: str) -> int:
-        """Get token budget for model from ResourceModel (with hardcoded fallback)."""
-        # Gemini not in ResourceModel, use hardcoded fallback
-        if model == "gemini":
-            return 200000
+        """Get token budget from ResourceModel with default fallbacks."""
         budget = self.resource_model.get_budget(model)
-        # Fallback to hardcoded values for backward compatibility with mocked tests
-        if not isinstance(budget, int) or budget == 0:
-            fallbacks = {
-                "minimax": 100000000,
-                "haiku": 1000000,
-                "sonnet": 1000000,
-                "opus": 500000,
-            }
-            return fallbacks.get(model, 200000)
-        return budget
+        if isinstance(budget, int) and budget > 0: return budget
+        fallbacks = {"minimax": 100000000, "haiku": 1000000, "sonnet": 1000000, "opus": 500000, "gemini": 200000}
+        return fallbacks.get(model, 200000)
 
     def stream(
         self,
@@ -393,17 +373,11 @@ class Executor:
         strategy: dict[str, object] | None = None,
         task_type: str = "general",
     ) -> Generator[str, None, None]:
-        """Stream prompt execution, yielding text chunks from the provider.
-
-        Selects model, then calls provider.chat_stream() and yields chunks.
-        """
+        """Stream prompt execution with sequential fallback."""
         selection = self._select_model(complexity, task_type)
-
-        # Try primary model, then fallback chain
         tried: list[str] = []
         for model_key in [selection.primary] + selection.fallback:
-            if model_key in tried:
-                continue
+            if model_key in tried: continue
             tried.append(model_key)
             try:
                 provider, model_name = _get_provider(model_key)
@@ -411,10 +385,7 @@ class Executor:
                 if plan and isinstance(plan, (list, tuple)):
                     plan_text = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(plan))
                     system_prompt = L2_STRATEGY_SYSTEM_TEMPLATE.format(plan_text=plan_text)
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ]
+                    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
                 else:
                     messages = [{"role": "user", "content": prompt}]
 
@@ -425,17 +396,11 @@ class Executor:
                         content = ""
                         if isinstance(delta, dict):
                             choices = delta.get("choices", [])
-                            if choices:
-                                content = choices[0].get("delta", {}).get("content", "")
-                        if content:
-                            yield content
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
-                return  # Success
-            except Exception:
-                continue
-
-        # All models failed - raise
+                            if choices: content = choices[0].get("delta", {}).get("content", "")
+                        if content: yield content
+                    except: continue
+                return
+            except: continue
         raise RuntimeError("All model providers failed")
 
     def stream_messages(
@@ -455,15 +420,8 @@ class Executor:
         frequency_penalty: float | None = None,
         stop: str | list[str] | None = None,
     ) -> Generator[dict[str, Any], None, None]:
-        """Stream with full message list and optional tool/format params.
-
-        Yields dicts with delta content and optional tool_call deltas.
-        In agent_mode, L4/L5 are deferred until after stream completes
-        (currently no-op since streaming defers post-processing).
-        """
+        """Stream messages with sequential fallback."""
         selection = self._select_model(complexity, task_type)
-
-        # Inject L2 strategy as system message
         msgs = list(messages)
         plan = strategy.get("plan") if strategy else None
         if plan and isinstance(plan, (list, tuple)):
@@ -472,29 +430,19 @@ class Executor:
             msgs = [{"role": "system", "content": system_prompt}] + msgs
 
         kwargs: dict[str, Any] = {}
-        if tools:
-            kwargs["tools"] = tools
-        if tool_choice:
-            kwargs["tool_choice"] = tool_choice
-        if response_format:
-            kwargs["response_format"] = response_format
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-        if temperature != 1.0:
-            kwargs["temperature"] = temperature
-        if top_p is not None:
-            kwargs["top_p"] = top_p
-        if presence_penalty is not None:
-            kwargs["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            kwargs["frequency_penalty"] = frequency_penalty
-        if stop is not None:
-            kwargs["stop"] = stop
+        if tools: kwargs["tools"] = tools
+        if tool_choice: kwargs["tool_choice"] = tool_choice
+        if response_format: kwargs["response_format"] = response_format
+        if max_tokens is not None: kwargs["max_tokens"] = max_tokens
+        if temperature != 1.0: kwargs["temperature"] = temperature
+        if top_p is not None: kwargs["top_p"] = top_p
+        if presence_penalty is not None: kwargs["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None: kwargs["frequency_penalty"] = frequency_penalty
+        if stop is not None: kwargs["stop"] = stop
 
         tried: list[str] = []
         for model_key in [selection.primary] + selection.fallback:
-            if model_key in tried:
-                continue
+            if model_key in tried: continue
             tried.append(model_key)
             try:
                 provider, model_name = _get_provider(model_key)
@@ -502,22 +450,14 @@ class Executor:
                 for chunk_json in chunks:
                     try:
                         delta = json.loads(chunk_json)
-                        if not isinstance(delta, dict):
-                            continue
+                        if not isinstance(delta, dict): continue
                         choices = delta.get("choices", [])
-                        if not choices:
-                            continue
+                        if not choices: continue
                         choice = choices[0]
                         result: dict[str, Any] = {"delta": choice.get("delta", {}), "finish_reason": choice.get("finish_reason")}
-                        # Forward tool_call deltas
-                        if "tool_calls" in choice:
-                            result["tool_calls"] = choice["tool_calls"]
+                        if "tool_calls" in choice: result["tool_calls"] = choice["tool_calls"]
                         yield result
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
-                return  # Success
-            except Exception:
-                continue
-
-        # All models failed
+                    except: continue
+                return
+            except: continue
         raise RuntimeError("All model providers failed")

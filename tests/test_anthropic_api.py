@@ -141,14 +141,11 @@ class TestAnthropicMessagesEndpoint:
 
     def test_messages_endpoint_stream_true_returns_sse(self) -> None:
         """stream=true should return SSE with Anthropic event types."""
-        from blend.api import app
-        client = TestClient(app, raise_server_exceptions=False)
+        from blend.api import app, orchestrator
 
-        with patch("blend.api.BlendOrchestrator") as mock_orch_cls:
-            mock_orch = MagicMock()
-            mock_orch_cls.return_value = mock_orch
-            # stream_messages yields chunks
-            mock_orch.stream_messages.return_value = iter([
+        # Patch the orchestrator instance directly
+        with patch.object(orchestrator, "stream_messages") as mock_stream:
+            mock_stream.return_value = iter([
                 {
                     "id": "msg_test",
                     "choices": [{"delta": {"content": "Hello"}, "finish_reason": None}],
@@ -159,6 +156,7 @@ class TestAnthropicMessagesEndpoint:
                 },
             ])
 
+            client = TestClient(app, raise_server_exceptions=False)
             response = client.post(
                 "/v1/messages",
                 json={

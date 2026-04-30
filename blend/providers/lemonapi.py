@@ -5,18 +5,46 @@ from typing import Any
 
 import httpx
 
+from blend.core.circuit_breaker import get_registry
 from blend.providers.base import LLMResponse
 
 
-def _retry_request(fn: Any, retries: int = 3) -> Any:
-    """Execute fn with exponential backoff retry on transient errors."""
+def _retry_request(
+    fn: Any,
+    retries: int = 3,
+    provider_name: str = "lemon",
+) -> Any:
+    """Execute fn with exponential backoff retry on transient errors.
+
+    Integrates circuit breaker for fast-fail on repeated failures.
+    Records success/failure to the circuit breaker.
+    """
+    registry = get_registry()
+    breaker = registry.get(provider_name)
+
     for attempt in range(retries):
+        # Fast-fail if circuit is open
+        if not breaker.allow_request():
+            raise httpx.ConnectError(f"Circuit breaker open for {provider_name}")
+
         try:
-            return fn()
-        except (httpx.ConnectError, httpx.RemoteProtocolError, OSError):
+            result = fn()
+            breaker.record_success()
+            return result
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.TimeoutException, OSError):
+            breaker.record_failure()
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
+        except httpx.HTTPStatusError as e:
+            # Trip breaker immediately on 401/503
+            status_code = e.response.status_code
+            if status_code in (401, 503):
+                for _ in range(breaker.failure_threshold):
+                    breaker.record_failure(error_code=status_code)
+            raise
+        except Exception:
+            raise
 
 
 class LemonProvider:
@@ -25,15 +53,13 @@ class LemonProvider:
     BASE_URL = "https://new.lemonapi.site/v1"
     DEFAULT_MODEL = "[L]gemini-3-flash-preview"
 
-    # Available models (must use [L] prefix)
+    # Available models (Elite Gemini 3 Series)
     MODELS = {
         "flash": "[L]gemini-3-flash-preview",
-        "flash-thinking": "[L]gemini-2.5-flash-maxthinking",
-        "flash-search": "[L]gemini-2.5-flash-search",
         "pro": "[L]gemini-3-pro-preview",
-        "pro-thinking": "[L]gemini-2.5-pro-maxthinking",
-        "pro-search": "[L]gemini-2.5-pro-search",
-        "pro-preview": "[L]gemini-3.1-pro-preview",
+        "pro-ultra": "[L]gemini-3.1-pro-preview",
+        "image-flash": "[L]gemini-3.1-flash-image-preview",
+        "image-pro": "[L]gemini-3-pro-image-preview",
     }
 
     def __init__(
@@ -54,6 +80,16 @@ class LemonProvider:
         self._api_key = api_key or _os.environ.get("LEMON_API_KEY", "")
         self._base_url = base_url or self.BASE_URL
         self._timeout = timeout
+        self._client: httpx.Client | None = None
+
+    def _get_client(self) -> httpx.Client:
+        """Get or create a persistent HTTP client with connection pooling."""
+        if self._client is None:
+            self._client = httpx.Client(
+                timeout=self._timeout,
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            )
+        return self._client
 
     def chat(
         self,
@@ -89,12 +125,12 @@ class LemonProvider:
         }
 
         def _do_request() -> dict[str, Any]:
-            with httpx.Client(timeout=self._timeout) as client:
-                resp = client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
-                return dict[str, Any](resp.json())
+            client = self._get_client()
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
 
-        data = _retry_request(_do_request)
+        data = _retry_request(_do_request, provider_name="lemon")
         msg = data["choices"][0]["message"]
         return LLMResponse(
             content=msg.get("content", ""),
@@ -130,14 +166,20 @@ class LemonProvider:
         chunks: list[str] = []
 
         def _do_stream() -> None:
-            with httpx.Client(timeout=self._timeout) as client:
-                with client.stream("POST", url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
-                    for line in response.iter_lines():
-                        if line.startswith("data: "):
-                            if line == "data: [DONE]":
-                                break
-                            chunks.append(line[6:])
+            client = self._get_client()
+            with client.stream("POST", url, json=payload, headers=headers) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if line.startswith("data: "):
+                        if line == "data: [DONE]":
+                            break
+                        chunks.append(line[6:])
 
-        _retry_request(_do_stream)
+        _retry_request(_do_stream, provider_name="lemon")
         return chunks
+
+    def close(self) -> None:
+        """Close the persistent HTTP client."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None

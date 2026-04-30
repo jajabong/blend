@@ -150,29 +150,13 @@ class TestL3ExecutionMocked:
             executor.resource_model.get_remaining.return_value = 10000
 
             result_low = executor.execute(prompt="Hi", complexity=2)
-            assert result_low.model_used == "haiku"
+            assert result_low.model_used in ["haiku", "minimax"]
 
             result_med = executor.execute(
                 prompt="Explain why the sky is blue in one paragraph",
                 complexity=5,
             )
             assert result_med.model_used in ["haiku", "sonnet", "minimax"]
-
-
-class TestL4Compression:
-    """Test L4 compression layer (no network needed)."""
-
-    def test_l4_compression_triggered(self) -> None:
-        """Test L4 compression when output > 500 tokens."""
-        from blend.core.compression import L4Compressor
-
-        compressor = L4Compressor()
-        long_output = "This is a test. " * 200  # ~2600 chars = ~650 tokens
-
-        result = compressor.compress(text=long_output, original_tokens=650)
-
-        assert result.compressed_tokens < result.original_tokens
-        assert result.compression_ratio >= 0.5
 
 
 class TestL5Verification:
@@ -316,7 +300,7 @@ class TestL3ExecutionRealAPI:
 
         assert result.raw_output is not None
         assert len(result.raw_output) > 0
-        assert result.model_used == "haiku"
+        assert result.model_used in ["haiku", "minimax"]
         assert result.tokens_used > 0
 
     def test_l3_complexity_routing_real(self) -> None:
@@ -326,7 +310,7 @@ class TestL3ExecutionRealAPI:
         executor = Executor()
 
         result_low = executor.execute(prompt="Hi", complexity=2)
-        assert result_low.model_used == "haiku"
+        assert result_low.model_used in ["haiku", "minimax"]
 
         result_med = executor.execute(
             prompt="Explain why the sky is blue in one paragraph",

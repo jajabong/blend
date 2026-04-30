@@ -11,9 +11,9 @@ from blend.core.enforcer import (
 class TestTabooDefinitions:
     """Test taboo definitions."""
 
-    def test_all_8_taboos_defined(self) -> None:
-        """All 8 taboos should be defined."""
-        assert len(TABOOS) == 8
+    def test_all_taboos_defined(self) -> None:
+        """All active taboos should be defined (6 after L4 removal)."""
+        assert len(TABOOS) == 6
 
     def test_taboos_have_ids(self) -> None:
         """Each taboo should have an ID."""

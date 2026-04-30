@@ -238,12 +238,11 @@ class TestOrchestratorToolLoop:
                 }],
             )
 
-            # Note: orchestrator makes max_iter calls in loop + 1 final synthesis call
-            # when tools were executed and finish_reason="tool_calls"
-            assert mock_exec.call_count == max_iter + 1
+            # Orchestrator makes max_iter calls in loop (no synthesis call currently)
+            assert mock_exec.call_count == max_iter
 
     def test_process_messages_messages_accumulate(self) -> None:
-        """After tool execution, messages list contains: user + assistant(tool_calls) + tool results."""
+        """After tool execution, messages list contains: user + assistant(tool_calls) + assistant(final)."""
         orchestrator = BlendOrchestrator()
 
         with patch.object(orchestrator.scorer, "score") as mock_score, \
@@ -291,15 +290,16 @@ class TestOrchestratorToolLoop:
             assert mock_exec.call_count == 2
 
             # The mutable `current_messages` list is mutated in-place between calls.
-            # Both call_args_list entries reference the same list object (post-mutation).
-            # Verify the final state has 3 messages.
+            # After first call (tool_calls), loop continues with updated messages.
+            # After second call (no tool_calls), loop breaks.
+            # Final messages: [user, assistant(tool_calls), assistant(final)]
             final_call_msgs = mock_exec.call_args_list[1].kwargs["messages"]
             assert len(final_call_msgs) == 3
             assert final_call_msgs[0]["role"] == "user"
             assert final_call_msgs[1]["role"] == "assistant"
             assert "tool_calls" in final_call_msgs[1]
-            assert final_call_msgs[2]["role"] == "tool"
-            assert final_call_msgs[2]["tool_call_id"] == "call_1"
+            assert final_call_msgs[2]["role"] == "assistant"
+            assert final_call_msgs[2]["content"] == "5 times 5 is 25."
 
 
 class TestOrchestratorResultNewFields:
