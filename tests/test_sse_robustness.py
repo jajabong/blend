@@ -5,6 +5,7 @@ and other HTTP client libraries that have strict SSE format requirements.
 """
 
 import json
+import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 import asyncio
 
@@ -41,6 +42,7 @@ class TestSSEFormatHelpers:
         assert not _is_valid_sse_line("")
 
 
+@pytest.mark.integration
 class TestSSEStreamRobustness:
     """Test SSE stream format standardization and error handling via curl."""
 
