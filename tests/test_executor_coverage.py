@@ -9,10 +9,10 @@ class TestExecutorEstimateTokens:
     """Test _estimate_tokens method."""
 
     def test_short_text(self) -> None:
-        """Short text returns 0."""
+        """Short text returns at least 1."""
         executor = Executor()
         result = executor._estimate_tokens("Hi")
-        assert result == 0  # 2 chars / 4 = 0
+        assert result == 1  # max(1, 2 chars // 4) = max(1, 0) = 1
 
     def test_medium_text(self) -> None:
         """Medium text returns correct estimate."""
