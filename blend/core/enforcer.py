@@ -14,9 +14,8 @@ class TabooType(StrEnum):
     """Taboo violation types."""
 
     SKIP_L1 = "SKIP_L1"
-    OPUS_FORMATTER = "OPUS_FORMATTER"
+    OPUS_FORMATTER = "OPUS_FORMATTER"  # Deprecated: L4 removed
     GEMINI_SCATTERED = "GEMINI_SCATTERED"
-    L4_NOT_APPLIED = "L4_NOT_APPLIED"
     L2_OVER_300T = "L2_OVER_300T"
     CROSS_LAYER_JUMP = "CROSS_LAYER_JUMP"
     HARDCODED_CREDENTIALS = "HARDCODE_CREDENTIALS"
@@ -92,7 +91,7 @@ class Enforcer:
         layer_path: str,
         complexity: int | None = None,
         output_tokens: int | None = None,
-        l4_applied: bool = False,
+        l4_applied: bool = False,  # Deprecated: L4 removed, parameter ignored
         gemini_used: bool = False,
         gemini_context_percent: float = 0,
         model_used: str | None = None,
@@ -104,7 +103,7 @@ class Enforcer:
             layer_path: The layer execution path
             complexity: Complexity score (for determining valid paths)
             output_tokens: Token count of output
-            l4_applied: Whether L4 compression was applied
+            l4_applied: Deprecated. L4 removed in v2.0, always ignored.
             gemini_used: Whether Gemini was used
             gemini_context_percent: Gemini context usage percentage
             model_used: Model that was used for execution

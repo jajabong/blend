@@ -72,11 +72,11 @@ class TestEnforcer:
         assert result.allowed is True
 
     def test_enforce_allows_valid_paths_for_high(self) -> None:
-        """HIGH complexity should require L1>L2>L3>L5 path."""
+        """HIGH complexity should require L1>L2>L3>L5 path (L4 removed)."""
         enforcer = Enforcer()
         result = enforcer.enforce(
             request={"prompt": "Design a system"},
-            layer_path="L1>L2>L3>L4>L5",
+            layer_path="L1>DRAFT>L2>L3>L5",
             complexity=9,
         )
         assert result.allowed is True
@@ -103,17 +103,18 @@ class TestEnforcer:
         )
         assert result.allowed is True
 
-    def test_enforce_requires_l4_for_large_output(self) -> None:
-        """Output >500 tokens without L4 should be blocked."""
+    def test_enforce_l4_removed_always_passes(self) -> None:
+        """L4 has been removed - _check_l4_required always returns empty (no-op)."""
         enforcer = Enforcer()
+        # Even with >500 tokens and l4_applied=False, should NOT block (L4 removed)
         result = enforcer.enforce(
             request={"prompt": "Long response"},
-            layer_path="L1>L3>L5",  # Missing L4
+            layer_path="L1>L3>L5",
             output_tokens=600,
             l4_applied=False,
         )
-        # Should flag L4 requirement
-        assert result.violations is not None
+        # L4 removed - check is no-op, should allow
+        assert result.allowed is True
 
 
 class TestEnforcementResult:

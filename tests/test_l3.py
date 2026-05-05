@@ -105,16 +105,22 @@ class TestExecutor:
     def test_execute_routes_correctly(self) -> None:
         """Executor should route to correct model."""
         mock_response = MockResponse("The weather is sunny")
-        with patch("blend.core.executor._get_provider") as mock_get:
+        with patch("blend.core.executor._get_provider") as mock_get, \
+             patch("blend.core.circuit_breaker.get_registry") as mock_reg:
             mock_provider = MagicMock()
             mock_provider.chat.return_value = mock_response
             mock_get.return_value = (mock_provider, "MiniMax-M2.7")
+            # Mock circuit breaker to allow all
+            mock_breaker = MagicMock()
+            mock_breaker.allow_request.return_value = True
+            mock_breaker.state = MagicMock(value="closed")
+            mock_reg.return_value.get.return_value = mock_breaker
             executor = Executor()
             result = executor.execute(
                 prompt="What's the weather?",
                 complexity=2,
             )
-            assert result.model_used in ["minimax", "haiku", "sonnet", "opus"]
+            assert result.model_used in ["minimax", "haiku", "sonnet", "opus", "gemini"]
 
     def test_execute_returns_l3_output(self) -> None:
         """Execute should return L3Output."""

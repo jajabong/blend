@@ -343,7 +343,7 @@ class TestMinimaxProvider:
     def test_chat_success(self) -> None:
         """chat() returns MinimaxResponse on success."""
         mock_data = {
-            "choices": [{"message": {"content": "Minimax response"}}],
+            "choices": [{"message": {"content": "Minimax response"}, "finish_reason": "stop"}],
             "model": "MiniMax-M2.7",
             "usage": {"prompt_tokens": 8, "completion_tokens": 12},
         }
@@ -363,7 +363,7 @@ class TestMinimaxProvider:
     def test_chat_default_model(self) -> None:
         """chat() uses MiniMax-M2.7 when model not specified."""
         mock_data = {
-            "choices": [{"message": {"content": "ok"}}],
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
             "model": "MiniMax-M2.7",
             "usage": {},
         }
@@ -383,7 +383,7 @@ class TestMinimaxProvider:
     def test_chat_custom_model(self) -> None:
         """chat() uses custom model when specified."""
         mock_data = {
-            "choices": [{"message": {"content": "ok"}}],
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
             "model": "other-model",
             "usage": {},
         }
@@ -406,7 +406,7 @@ class TestMinimaxProvider:
     def test_chat_includes_extra_kwargs(self) -> None:
         """chat() passes through extra kwargs."""
         mock_data = {
-            "choices": [{"message": {"content": "ok"}}],
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
             "model": "MiniMax-M2.7",
             "usage": {},
         }
@@ -442,7 +442,7 @@ class TestMinimaxProvider:
     def test_chat_uses_env_api_key(self) -> None:
         """Uses MINIMAX_API_KEY from environment."""
         mock_data = {
-            "choices": [{"message": {"content": "ok"}}],
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
             "model": "MiniMax-M2.7",
             "usage": {},
         }
@@ -457,7 +457,7 @@ class TestMinimaxProvider:
                     provider.chat(messages=[{"role": "user", "content": "hi"}])
 
                 headers = mock_client.post.call_args[1]["headers"]
-                assert "env-key" in headers["Authorization"]
+                assert headers["Authorization"] == "Bearer env-key"
 
     def test_chat_stream(self) -> None:
         """chat_stream() returns parsed chunks."""

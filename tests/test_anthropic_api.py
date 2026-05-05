@@ -71,7 +71,7 @@ class TestAnthropicMessagesEndpoint:
         assert response.status_code == 422
 
     def test_messages_endpoint_validation_missing_max_tokens(self) -> None:
-        """Missing max_tokens should return 422."""
+        """Missing max_tokens is optional and should return 200."""
         from blend.api import app
         client = TestClient(app, raise_server_exceptions=False)
 
@@ -82,7 +82,7 @@ class TestAnthropicMessagesEndpoint:
                 "messages": [{"role": "user", "content": "hello"}],
             },
         )
-        assert response.status_code == 422
+        assert response.status_code == 200
 
     def test_messages_endpoint_with_system_prompt(self) -> None:
         """System prompt should be prepended as a system message."""

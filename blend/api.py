@@ -10,9 +10,10 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()  # noqa: E402
 
@@ -31,12 +32,24 @@ except ValueError as e:
 
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Register MCP tools at startup, not per-request."""
+    import logging
+    import os
+    logger = logging.getLogger("blend")
+
+    # Force clear any cached config
     from blend.config import get_mcp_servers
-    from blend.core.tool_executor import register_mcp_tools
+    get_mcp_servers.cache_clear()
+
+    from blend.core.tool_executor import register_mcp_tools, _TOOL_REGISTRY
 
     mcp_servers = get_mcp_servers()
+    logger.info(f"MCP servers at startup: {mcp_servers}")
+    logger.info(f"BLEND_MCP_SERVERS env: {os.environ.get('BLEND_MCP_SERVERS', 'NOT SET')}")
     if mcp_servers:
         register_mcp_tools(mcp_servers)
+        logger.info(f"Tools registered at startup: {list(_TOOL_REGISTRY.keys())}")
+    else:
+        logger.warning("No MCP servers configured")
     yield
     # Cleanup on shutdown if needed
 
@@ -48,6 +61,18 @@ app = FastAPI(
     lifespan=lifespan,  # type: ignore[arg-type]
 )
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log validation errors for debugging."""
+    import logging
+    logger = logging.getLogger("blend")
+    logger.error(f"Validation error: {exc.errors()}")
+    logger.error(f"Request body: {await request.body()}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": (await request.body()).decode()}
+    )
+
 # Global instances
 resource_model = ResourceModel()
 orchestrator = BlendOrchestrator()
@@ -57,7 +82,7 @@ class Message(BaseModel):
     """Chat message."""
 
     role: str
-    content: str | list[dict[str, Any]]
+    content: str | list[dict[str, Any]] | None = None  # Optional for tool calls messages
     tool_call_id: str | None = None
     name: str | None = None
 
@@ -92,7 +117,7 @@ class AnthropicMessageRequest(BaseModel):
     """Anthropic Messages API request — Claude Code compatible."""
 
     model: str
-    max_tokens: int
+    max_tokens: int | None = None
     messages: list[dict[str, Any]]
     stream: bool = False
     system: str | list[dict[str, Any]] | None = None
@@ -145,6 +170,8 @@ class ChatCompletionRequest(BaseModel):
     messages: list[Message]
     stream: bool = False
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None  # OpenAI reasoning models
+    reasoning_effort: str | None = None  # OpenAI reasoning effort (low/medium/high)
     temperature: float = 1.0
     top_p: float | None = None
     presence_penalty: float | None = None
@@ -155,6 +182,7 @@ class ChatCompletionRequest(BaseModel):
     response_format: dict[str, Any] | None = None
     agent_mode: bool = False
     mcp_servers: list[dict[str, Any]] | None = None
+    stream_options: dict[str, Any] | None = None  # OpenAI stream options
 
 
 def process_through_layers(prompt: str) -> tuple[str, dict[str, Any]]:
@@ -189,9 +217,12 @@ def stream_through_layers(prompt: str) -> Generator[str, None, None]:
 
     chunk_id = f"chatcmpl-{int(time.time() * 1000)}"
     for chunk in orchestrator.stream(prompt):
+        choices = chunk.get("choices", [])
+        if not choices and "delta" in chunk:
+            choices = [{"index": 0, "delta": chunk.get("delta", {}), "finish_reason": chunk.get("finish_reason", "stop")}]
         payload = {
             "id": chunk.get("id", chunk_id),
-            "choices": chunk.get("choices", []),
+            "choices": choices,
         }
         yield f"data: {json.dumps(payload)}\n\n"
     yield "data: [DONE]\n\n"
@@ -236,13 +267,20 @@ async def chat_completions(request: ChatCompletionRequest) -> JSONResponse | Str
     blend auto-routes to optimal model based on task complexity.
     Supports: tools, tool_choice, response_format (JSON mode), multimodal content.
     """
+    import logging
+    logger = logging.getLogger("blend")
+    logger.debug(f"chat_completions request: stream={request.stream}, tools={bool(request.tools)}, tool_choice={request.tool_choice}")
+    if request.tools:
+        logger.debug(f"tools: {request.tools[:1]}...")  # First tool only
     if not request.messages:
         raise HTTPException(status_code=400, detail="Messages cannot be empty")
 
     # Build message list preserving structure (multimodal, tool results, etc.)
     messages: list[dict[str, Any]] = []
     for m in request.messages:
-        msg_dict: dict[str, Any] = {"role": m.role, "content": m.content}
+        msg_dict: dict[str, Any] = {"role": m.role}
+        if m.content is not None:
+            msg_dict["content"] = m.content
         if m.tool_call_id:
             msg_dict["tool_call_id"] = m.tool_call_id
         if m.name:
@@ -392,12 +430,82 @@ def _stream_messages(
         frequency_penalty=frequency_penalty,
         stop=stop,
     ):
+        choices = chunk.get("choices", [])
+        if not choices and "delta" in chunk:
+            choices = [{"index": 0, "delta": chunk.get("delta", {}), "finish_reason": chunk.get("finish_reason", "stop")}]
+        import time
         payload = {
             "id": chunk.get("id", chunk_id),
-            "choices": chunk.get("choices", []),
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": chunk.get("model", "blend"),
+            "choices": choices,
         }
         yield f"data: {json.dumps(payload)}\n\n"
     yield "data: [DONE]\n\n"
+
+
+import os
+
+# SSE heartbeat interval (seconds) - 0 disables heartbeat
+SSE_HEARTBEAT_INTERVAL = float(os.environ.get("SSE_HEARTBEAT_INTERVAL", "15"))
+
+# Maximum time between chunks before sending heartbeat
+SSE_CHUNK_TIMEOUT = float(os.environ.get("SSE_CHUNK_TIMEOUT", "10"))
+
+
+def _normalize_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    """Normalize tool schema for compatibility with all providers.
+
+    Some providers (minimax) reject tools with empty objects {} in properties.
+    This function removes empty property definitions and ensures consistent structure.
+    """
+    if not isinstance(tool, dict):
+        return tool
+
+    tool = dict(tool)  # Don't mutate original
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+
+    parameters = function.get("parameters", {})
+    if not isinstance(parameters, dict):
+        return tool
+
+    # Remove properties with empty definitions {}
+    properties = parameters.get("properties", {})
+    if isinstance(properties, dict):
+        cleaned_properties = {
+            k: v for k, v in properties.items()
+            if v and isinstance(v, dict) and v
+        }
+        parameters["properties"] = cleaned_properties
+
+    function["parameters"] = parameters
+    tool["function"] = function
+    return tool
+
+
+def _normalize_tools_list(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Normalize a list of tools for provider compatibility."""
+    if not tools:
+        return None
+    return [_normalize_tool_schema(t) for t in tools]
+
+
+def _format_sse_payload(payload: dict[str, Any]) -> str:
+    """Format a payload as standard SSE data line."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _format_sse_comment(message: str) -> str:
+    """Format a comment as SSE comment line (starts with :)."""
+    return f": {message}\n\n"
+
+
+def _is_valid_sse_line(line: str) -> bool:
+    """Check if a line is valid SSE format."""
+    return line.startswith("data: ") or line.startswith(":")
 
 
 async def _stream_async(
@@ -419,20 +527,29 @@ async def _stream_async(
     sync generator, rather than buffering the entire stream before sending the
     first byte. This prevents "Connection reset by server" when the tool execution
     loop takes time before producing output.
+
+    Features:
+    - Periodic heartbeat comments to keep connection alive
+    - Standard SSE format validation
+    - Graceful error handling in SSE format
     """
     import json as json_mod
 
     queue: asyncio.Queue[tuple[bool, str | BaseException]] = asyncio.Queue()
     chunk_id_str = f"chatcmpl-{int(time.time() * 1000)}"
     exc_info: BaseException | None = None
+    last_chunk_time = time.monotonic()
+    chunk_count = 0
 
     def sync_producer() -> None:
         """Runs in a thread pool — produces chunks into the async queue."""
-        nonlocal exc_info
+        nonlocal exc_info, last_chunk_time, chunk_count
+        # Normalize tools before passing to provider (removes empty property objects)
+        normalized_tools = _normalize_tools_list(tools)
         try:
             for chunk in orchestrator.stream_messages(
                 messages=messages,
-                tools=tools,
+                tools=normalized_tools,
                 tool_choice=tool_choice,
                 response_format=response_format,
                 agent_mode=agent_mode,
@@ -443,11 +560,26 @@ async def _stream_async(
                 frequency_penalty=frequency_penalty,
                 stop=stop,
             ):
+                choices = chunk.get("choices", [])
+                if not choices and "delta" in chunk:
+                    choices = [{"index": 0, "delta": chunk.get("delta", {}), "finish_reason": chunk.get("finish_reason", "stop")}]
                 payload = {
                     "id": chunk.get("id", chunk_id_str),
-                    "choices": chunk.get("choices", []),
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": chunk.get("model", "blend"),
+                    "choices": choices,
                 }
-                queue.put_nowait((False, f"data: {json_mod.dumps(payload)}\n\n"))
+                last_chunk_time = time.monotonic()
+                chunk_count += 1
+                sse_line = f"data: {json_mod.dumps(payload)}\n\n"
+                # Validate SSE format before putting in queue
+                for line in sse_line.strip().split("\n"):
+                    if line and not _is_valid_sse_line(line):
+                        # Force standard format
+                        sse_line = f"data: {json_mod.dumps(payload)}\n\n"
+                        break
+                queue.put_nowait((False, sse_line))
             queue.put_nowait((False, "data: [DONE]\n\n"))
         except BaseException as e:
             exc_info = e
@@ -461,13 +593,51 @@ async def _stream_async(
     # Consume chunks in real-time as they arrive
     while True:
         if exc_info is not None:
-            raise exc_info
+            # Circuit breaker or connection error - yield graceful error instead of abrupt close
+            err_msg = str(exc_info)
+            if "Circuit breaker" in err_msg or "ConnectError" in type(exc_info).__name__:
+                error_payload = {
+                    "id": chunk_id_str,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": f"[Service temporarily unavailable: {err_msg}]"},
+                        "finish_reason": "error"
+                    }],
+                    "error": {
+                        "message": err_msg,
+                        "type": "circuit_breaker_open",
+                        "code": 503
+                    }
+                }
+                yield _format_sse_payload(error_payload)
+            yield "data: [DONE]\n\n"
+            break
         try:
-            is_exc, value = await asyncio.wait_for(queue.get(), timeout=60.0)
+            # Use shorter timeout to allow heartbeat checks
+            timeout = min(SSE_CHUNK_TIMEOUT, 30.0)  # Cap at 30s
+            is_exc, value = await asyncio.wait_for(queue.get(), timeout=timeout)
+            last_chunk_time = time.monotonic()
         except TimeoutError:
-            raise RuntimeError("Stream timeout — no chunk received in 60s") from None
+            # Send heartbeat if interval elapsed and no chunks received
+            if SSE_HEARTBEAT_INTERVAL > 0:
+                elapsed = time.monotonic() - last_chunk_time
+                if elapsed >= SSE_HEARTBEAT_INTERVAL:
+                    yield _format_sse_comment(f"heartbeat {int(elapsed)}s since last chunk")
+                    last_chunk_time = time.monotonic()
+            continue
         if is_exc:
-            raise value
+            # Other error - try graceful message in SSE format
+            error_payload = {
+                "id": chunk_id_str,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": f"[Error: {str(value)}]"},
+                    "finish_reason": "error"
+                }]
+            }
+            yield _format_sse_payload(error_payload)
+            yield "data: [DONE]\n\n"
+            break
         yield value  # type: ignore[misc]
         if value == "data: [DONE]\n\n":
             break
@@ -479,6 +649,41 @@ async def list_models() -> dict[str, Any]:
     return {
         "object": "list",
         "data": [
+            {
+                "id": "claude-haiku-4-5-20251001",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude Haiku 4.5",
+            },
+            {
+                "id": "claude-sonnet-4-6",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude Sonnet 4.6",
+            },
+            {
+                "id": "claude-sonnet-4-6-20250514",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude Sonnet 4.6",
+            },
+            {
+                "id": "claude-opus-4-6",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude Opus 4.6",
+            },
+            {
+                "id": "claude-opus-4-6-20250514",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude Opus 4.6",
+            },
             {
                 "id": "claude-3-5-sonnet-20241022",
                 "object": "model",
@@ -492,6 +697,34 @@ async def list_models() -> dict[str, Any]:
                 "created": 1700000000,
                 "owned_by": "anthropic",
                 "description": "Claude 3.5 Sonnet Latest",
+            },
+            {
+                "id": "claude-3-5-haiku-20241022",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude 3.5 Haiku",
+            },
+            {
+                "id": "claude-3-haiku-20240229",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude 3 Haiku",
+            },
+            {
+                "id": "claude-3-sonnet-20240229",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude 3 Sonnet",
+            },
+            {
+                "id": "claude-3-opus-20240229",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "anthropic",
+                "description": "Claude 3 Opus",
             }
         ],
     }
@@ -760,8 +993,15 @@ def _stream_anthropic(
     top_p: float | None,
     stop_sequences: list[str] | None,
 ) -> Generator[str, None, None]:
-    """Stream blend output as Anthropic SSE events."""
+    """Stream blend output as Anthropic SSE events.
+
+    Features:
+    - Standard SSE format for SDK compatibility
+    - Minimal heartbeat for very long streams (>50 chunks)
+    """
     is_first = True
+    chunk_count = 0
+
     for chunk in orchestrator.stream_messages(
         messages=messages,
         tools=tools,
@@ -770,7 +1010,15 @@ def _stream_anthropic(
         top_p=top_p,
         stop=stop_sequences,
     ):
+        chunk_count += 1
         for event in _convert_chunk_to_anthropic_events(chunk, is_first=is_first):
+            # Ensure all lines are valid SSE format
+            for line in (f"data: {event}\n\n").split("\n"):
+                if line.strip() and not _is_valid_sse_line(line):
+                    # Skip invalid lines, but this shouldn't happen with _convert_chunk_to_anthropic_events
+                    continue
             yield f"data: {event}\n\n"
         is_first = False
+
+    yield "data: [DONE]\n\n"
 

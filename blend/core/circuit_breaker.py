@@ -18,6 +18,10 @@ class CircuitState(Enum):
     HALF_OPEN = "half_open"  # Testing recovery
 
 
+# Global disable flag - set via environment variable
+DISABLE_CIRCUIT_BREAKER = os.environ.get("DISABLE_CIRCUIT_BREAKER", "").lower() in ("true", "1", "yes")
+
+
 class CircuitBreaker:
     """Circuit breaker with adaptive recovery and persistence support."""
 
@@ -68,15 +72,23 @@ class CircuitBreaker:
         }
 
     def allow_request(self) -> bool:
-        """Check if request can proceed."""
+        """Check if request can proceed.
+
+        Note: Caller must call record_success() or record_failure() after the probe,
+        not this method. This method only checks if request can proceed.
+        """
+        # Disabled via environment variable - allow everything
+        if DISABLE_CIRCUIT_BREAKER:
+            return True
         with self._lock:
             current = self.state
             if current == CircuitState.CLOSED:
                 return True
             if current == CircuitState.OPEN:
                 return False
-            # HALF_OPEN: allow one probe
-            self._state = CircuitState.CLOSED
+            # HALF_OPEN: allow one probe request through
+            # State transition to CLOSED happens via record_success() on probe success,
+            # or stays HALF_OPEN on probe failure (via record_failure)
             return True
 
     def record_success(self) -> None:
@@ -89,10 +101,23 @@ class CircuitBreaker:
             self._lockout_duration = self.base_recovery_timeout
 
     def record_failure(self, error_code: int | None = None) -> None:
-        """Record failure with error triage."""
+        """Record failure with error triage.
+
+        If already in HALF_OPEN (probe failed), immediately trip back to OPEN.
+        """
+        # Disabled via environment variable - don't record failures
+        if DISABLE_CIRCUIT_BREAKER:
+            return
         with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
+
+            # If we were probing (HALF_OPEN) and probe failed, go back to OPEN
+            if self._state == CircuitState.HALF_OPEN:
+                self._state = CircuitState.OPEN
+                # Reset failure count so next recovery cycle starts fresh
+                self._failure_count = 0
+                return
 
             # Error Triage logic
             if error_code == 401:

@@ -16,10 +16,11 @@ from typing import Any
 class CacheEntry:
     """A cached response entry."""
 
+    prompt: str  # Original prompt for similarity computation
     response: str
     model_used: str
     tokens_saved: int
-    hit_count: int = 1
+    hit_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,16 @@ class SemanticCache:
         key = (prompt_hash, task_type)
 
         if key in self._cache:
-            entry = self._cache[key]
+            entry = self._cache.pop(key)
+            # Re-add to mark as recently used (move to end for LRU)
+            updated_entry = CacheEntry(
+                prompt=entry.prompt,
+                response=entry.response,
+                model_used=entry.model_used,
+                tokens_saved=entry.tokens_saved,
+                hit_count=entry.hit_count + 1,
+            )
+            self._cache[key] = updated_entry
             return CacheResult(
                 hit=True,
                 response=entry.response,
@@ -112,8 +122,8 @@ class SemanticCache:
             # Look for entries with same signature and high similarity
             for (cache_hash, cache_task), entry in self._cache.items():
                 if cache_task == task_type:
-                    cached_prompt = entry.response[:200]  # approximate
-                    if self._compute_similarity(prompt, cached_prompt) > 0.85:
+                    # Use actual cached prompt for similarity computation (FIX: was entry.response[:200])
+                    if self._compute_similarity(prompt, entry.prompt) > 0.85:
                         return CacheResult(
                             hit=True,
                             response=entry.response,
@@ -141,9 +151,11 @@ class SemanticCache:
         prompt_hash = self._compute_hash(prompt)
         key = (prompt_hash, task_type)
         self._cache[key] = CacheEntry(
+            prompt=prompt,  # Store actual prompt for similarity computation
             response=response,
             model_used=model_used,
             tokens_saved=tokens_saved,
+            hit_count=0,
         )
 
     def invalidate(self, prompt: str, task_type: str = "general") -> None:

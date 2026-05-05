@@ -16,7 +16,6 @@ class Layer(StrEnum):
     L1_ENTRY = "L1"  # Minimax compression + complexity scoring
     L2_STRATEGY = "L2"  # Opus strategy generation (HIGH only)
     L3_EXECUTE = "L3"  # Dynamic model selection
-    L4_COMPRESS = "L4"  # Minimax secondary compression
     L5_VERIFY = "L5"  # Graded quality gate
 
 

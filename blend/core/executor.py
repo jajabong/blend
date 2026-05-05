@@ -72,21 +72,19 @@ class Recipe:
 
 
 def _get_provider(model_key: str) -> tuple["LLMProvider", str]:
-    """Get provider instance and model name for a model key."""
-    from blend.providers import BaosiProvider, LemonProvider, MinimaxProvider
+    """Get provider instance and model name for a model key.
+
+    Uses ProviderPool for instance reuse and connection pooling.
+    """
+    from blend.providers.pool import get_provider_pool
 
     current_map = get_model_map()
     if model_key not in current_map:
         model_key = "haiku"
 
     provider_class_name, model_name = current_map[model_key]
-
-    if provider_class_name == "MinimaxProvider":
-        return MinimaxProvider(), model_name  # type: ignore[return-value]
-    elif provider_class_name == "LemonProvider":
-        return LemonProvider(), model_name  # type: ignore[return-value]
-    else:
-        return BaosiProvider(), model_name  # type: ignore[return-value]
+    pool = get_provider_pool()
+    return pool.get(model_key, provider_class_name, model_name)
 
 
 class Executor:
@@ -95,6 +93,11 @@ class Executor:
     def __init__(self) -> None:
         """Initialize executor with resource model."""
         self.resource_model = ResourceModel()
+
+    def cleanup(self) -> None:
+        """Close all pooled provider connections."""
+        from blend.providers.pool import get_provider_pool
+        get_provider_pool().close_all()
 
     def execute(
         self,
@@ -417,9 +420,22 @@ class Executor:
                 last_model_used = stage.model
 
             elif stage.role == "verify":
+                verify_content = final_response.content if final_response else current_prompt
+                verify_prompt = f"""Quality check of the refined output.
+
+Review the final output for:
+1. Correctness and completeness
+2. Security (no eval, exec, dangerous patterns)
+3. Whether the draft's key points were incorporated
+
+Final Output:
+{verify_content}
+
+{f"Original Draft for reference:\n{draft_output.content}" if draft_output else ""}
+"""
                 final_response = self._call_model(
                     model=stage.model,
-                    prompt=f"Quality check: {final_response.content if final_response else current_prompt}",
+                    prompt=verify_prompt,
                     strategy=None,
                     timeout=stage.timeout,
                 )
@@ -514,8 +530,18 @@ class Executor:
         return usage.get("completion_tokens") or usage.get("total_tokens")
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count."""
-        return len(text) // 4
+        """Estimate token count using tiktoken or fallback heuristic."""
+        try:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+            return len(encoding.encode(text))
+        except ImportError:
+            # Fallback heuristic for non-English text
+            # Chinese: ~1.5 chars per token, English: ~4 chars per token
+            has_cjk = any('一' <= c <= '鿿' for c in text)
+            if has_cjk:
+                return len(text) * 2  # CJK characters are ~2 tokens each
+            return max(1, len(text) // 4)
 
     def _get_budget(self, model: str) -> int:
         """Get token budget from ResourceModel with default fallbacks."""
@@ -556,9 +582,9 @@ class Executor:
                             choices = delta.get("choices", [])
                             if choices: content = choices[0].get("delta", {}).get("content", "")
                         if content: yield content
-                    except: continue
+                    except Exception: continue
                 return
-            except: continue
+            except Exception: continue
         raise RuntimeError("All model providers failed")
 
     def stream_messages(
@@ -615,7 +641,7 @@ class Executor:
                         result: dict[str, Any] = {"delta": choice.get("delta", {}), "finish_reason": choice.get("finish_reason")}
                         if "tool_calls" in choice: result["tool_calls"] = choice["tool_calls"]
                         yield result
-                    except: continue
+                    except Exception: continue
                 return
-            except: continue
+            except Exception: continue
         raise RuntimeError("All model providers failed")

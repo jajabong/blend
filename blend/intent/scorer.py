@@ -125,11 +125,25 @@ class ComplexityScorer:
             " 对比 ", " 评价 ", " 论证 "
         ]
 
+        # Action verbs indicating detailed/thorough work
+        detailed_action_keywords = [
+            "介绍", "详细", "文章", "报告", "分析", "评估",
+            "introduction", "detailed", "article", "report", "analyze", "evaluate",
+            "explain", "describe", "elaborate", "comprehensive", "thorough",
+            "人物", "生平", "履历", "背景", "经历",
+            " biography", "profile", "career", "experience", "background"
+        ]
+
         count = sum(1 for indicator in complex_indicators if indicator in prompt_lower)
+        detailed_count = sum(1 for kw in detailed_action_keywords if kw in prompt_lower)
 
         if count >= 2:
             return 2
         elif count >= 1:
+            return 1
+        elif detailed_count >= 2:
+            return 2
+        elif detailed_count >= 1:
             return 1
         return 0
 

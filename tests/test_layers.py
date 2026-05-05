@@ -17,7 +17,6 @@ class TestLayer:
         assert Layer.L1_ENTRY.value == "L1"
         assert Layer.L2_STRATEGY.value == "L2"
         assert Layer.L3_EXECUTE.value == "L3"
-        assert Layer.L4_COMPRESS.value == "L4"
         assert Layer.L5_VERIFY.value == "L5"
 
 

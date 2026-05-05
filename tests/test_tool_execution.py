@@ -292,14 +292,15 @@ class TestOrchestratorToolLoop:
             # The mutable `current_messages` list is mutated in-place between calls.
             # After first call (tool_calls), loop continues with updated messages.
             # After second call (no tool_calls), loop breaks.
-            # Final messages: [user, assistant(tool_calls), assistant(final)]
+            # Final messages: [user, assistant(tool_calls), tool_result, assistant(final)]
             final_call_msgs = mock_exec.call_args_list[1].kwargs["messages"]
-            assert len(final_call_msgs) == 3
+            assert len(final_call_msgs) == 4
             assert final_call_msgs[0]["role"] == "user"
             assert final_call_msgs[1]["role"] == "assistant"
             assert "tool_calls" in final_call_msgs[1]
-            assert final_call_msgs[2]["role"] == "assistant"
-            assert final_call_msgs[2]["content"] == "5 times 5 is 25."
+            assert final_call_msgs[2]["role"] == "tool"
+            assert final_call_msgs[3]["role"] == "assistant"
+            assert final_call_msgs[3]["content"] == "5 times 5 is 25."
 
 
 class TestOrchestratorResultNewFields:

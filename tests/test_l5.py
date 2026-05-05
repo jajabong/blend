@@ -32,7 +32,7 @@ class TestQualityVerifier:
         result = verifier.verify(
             output="Simple response",
             quality_level="LOW",
-            layer_path="L1>L3>L4>L5",
+            layer_path="L1>L3>L5",
         )
         assert result.passed is not None
 
@@ -42,7 +42,7 @@ class TestQualityVerifier:
         result = verifier.verify(
             output="Medium complexity response",
             quality_level="MEDIUM",
-            layer_path="L1>L3>L4>L5",
+            layer_path="L1>L3>L5",
         )
         assert result.passed is not None
 
@@ -52,7 +52,7 @@ class TestQualityVerifier:
         result = verifier.verify(
             output="High complexity response",
             quality_level="HIGH",
-            layer_path="L1>L2>L3>L4>L5",
+            layer_path="L1>L2>L3>L5",
         )
         assert result.passed is not None
 
@@ -62,7 +62,7 @@ class TestQualityVerifier:
         result = verifier.verify(
             output="Test output",
             quality_level="MEDIUM",
-            layer_path="L1>L3>L4>L5",
+            layer_path="L1>L3>L5",
         )
         assert len(result.gates_checked) == 12
 
