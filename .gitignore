@@ -31,3 +31,26 @@ htmlcov/
 .vscode/
 *.swp
 *.swo
+
+# Logs
+*.log
+server.log
+blend_server.log
+minimax_debug.log
+server_debug.log
+claude_debug.log
+claude_debug2.log
+MINIMAX_NUCLEAR_LOG.txt
+
+# Runtime
+*.pid
+server.pid
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+
+# Misc
+opencode/
+data/sync/
