@@ -114,3 +114,11 @@ class ProviderPool:
 def get_provider_pool() -> ProviderPool:
     """Get the global provider pool instance."""
     return ProviderPool.get_instance()
+
+
+def reset_provider_pool() -> None:
+    """Reset the singleton instance. For testing only."""
+    with ProviderPool._lock:
+        if ProviderPool._instance is not None:
+            ProviderPool._instance.close_all()
+            ProviderPool._instance = None

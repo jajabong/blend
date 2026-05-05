@@ -23,8 +23,8 @@ def reset_provider_pool():
     """Reset provider pool singleton after each test to prevent state pollution."""
     yield
     # Reset the provider pool singleton after each test
-    import blend.providers.pool as pool_module
-    pool_module.ProviderPool._instance = None
+    from blend.providers.pool import reset_provider_pool
+    reset_provider_pool()
 
 
 @pytest.fixture
