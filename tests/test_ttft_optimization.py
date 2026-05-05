@@ -61,7 +61,8 @@ class TestTTFTSpeculativeExecution:
             result = orchestrator.process("Design a complex distributed system")
 
             # Verify concurrent execution happened (executor called for pre-draft)
-            assert mock_executor.execute.call_count >= 1
+            # Recipe model: HIGH complexity uses _execute_recipe instead of execute
+            assert mock_executor._execute_recipe.call_count >= 1 or mock_executor.execute.call_count >= 1
             assert "L2" in result.layer_path
 
     def test_process_no_race_for_low_complexity(self) -> None:

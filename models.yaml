@@ -62,15 +62,15 @@ tiers:
   minimax:
     provider: MinimaxProvider
     model_name: "MiniMax-M2.7"
-    tier: L1_L4
+    tier: L1
     cost_per_1k: 0.001
 
 # 统筹逻辑路由
 complexity_routing:
   low:
-    primary: haiku
+    primary: minimax
   medium:
-    primary: sonnet
+    primary: haiku
   high:
     primary: gemini_pro_ultra
 

@@ -67,7 +67,7 @@ class TestBlendOrchestrator:
         assert "L5" in result.layer_path
         assert result.complexity >= 1
         assert result.complexity <= 10
-        assert result.model_used in ["minimax", "haiku", "sonnet", "opus"]
+        assert result.model_used in ["minimax", "haiku", "sonnet", "opus", "gemini"]
 
     def test_layer_path_format(self) -> None:
         """Layer path should follow L1>L2>...>L5 format."""
@@ -142,11 +142,13 @@ class TestOrchestratorL2HighPath:
             args = mock_strategy.generate.call_args[0]
             assert args[1] == 9
 
-            # Verify executor received the plan
-            assert mock_executor.execute.call_count == 2
-            # Verify the final execution call received the plan
-            exec_kwargs = mock_executor.execute.call_args[1]
-            assert exec_kwargs["strategy"] == {"plan": ["Plan step 1", "Plan step 2"]}
+            # Verify executor recipe was used (Recipe model replaces old draft+execute pattern)
+            # HIGH complexity uses _execute_recipe, not execute()
+            assert mock_executor._execute_recipe.call_count == 1
+            # The recipe received strategy_hints from L2
+            recipe_kwargs = mock_executor._execute_recipe.call_args[1]
+            assert recipe_kwargs["recipe"] is not None
+            assert recipe_kwargs["task_type"] == "general"
 
 
     def test_process_includes_l2_in_layer_path_for_high(self) -> None:

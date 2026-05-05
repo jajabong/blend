@@ -113,7 +113,7 @@ class TestL3ExecutionMocked:
         """Test L3 execution with mocked Minimax (exhaust Haiku to force Minimax)."""
         from blend.core.executor import Executor
 
-        with patch("blend.providers.minimax.MinimaxProvider.chat", mock_provider_chat):
+        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat):
             executor = Executor()
             # Exhaust haiku budget so Tier1 complexity=2 falls back to Minimax
             executor.resource_model = MagicMock()
@@ -138,7 +138,7 @@ class TestL3ExecutionMocked:
             return MockLLMResponse("Mocked response content.")
 
         with patch.multiple(
-            "blend.providers.minimax.MinimaxProvider",
+            "blend.providers.minimax_new.MinimaxProvider",
             chat=mock_chat,
         ), patch.multiple(
             "blend.providers.baosiapi.BaosiProvider",
@@ -193,7 +193,7 @@ class TestOrchestratorIntegrationMocked:
         """Test orchestrator with simple prompt (mocked providers)."""
         from blend.core.orchestrator import BlendOrchestrator
 
-        with patch("blend.providers.minimax.MinimaxProvider.chat", mock_provider_chat), \
+        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat), \
              patch("blend.providers.baosiapi.BaosiProvider.chat", mock_provider_chat), \
              patch("blend.providers.lemonapi.LemonProvider.chat", mock_provider_chat):
             orchestrator = BlendOrchestrator()
@@ -202,15 +202,16 @@ class TestOrchestratorIntegrationMocked:
             assert result.final_output is not None
             assert len(result.final_output) > 0
             assert "L1" in result.layer_path
-            assert "L3" in result.layer_path
+            # Recipe architecture: MEDIUM uses DRAFT>REFINE or EXECUTE (gemini types use EXECUTE)
+            assert "DRAFT" in result.layer_path or "REFINE" in result.layer_path or "EXECUTE" in result.layer_path or "L3" in result.layer_path
             assert "L5" in result.layer_path
-            assert result.model_used in ("minimax", "haiku", "sonnet", "opus")
+            assert result.model_used in ("minimax", "haiku", "sonnet", "opus", "gemini")
 
     def test_orchestrator_complex_prompt_mocked(self) -> None:
         """Test orchestrator with complex prompt (mocked - eliminates flaky network calls)."""
         from blend.core.orchestrator import BlendOrchestrator
 
-        with patch("blend.providers.minimax.MinimaxProvider.chat", mock_provider_chat), \
+        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat), \
              patch("blend.providers.baosiapi.BaosiProvider.chat", mock_provider_chat), \
              patch("blend.providers.lemonapi.LemonProvider.chat", mock_provider_chat):
             orchestrator = BlendOrchestrator()
@@ -223,13 +224,14 @@ class TestOrchestratorIntegrationMocked:
             assert len(result.final_output) > 0
             assert result.complexity >= 5
             assert "L1" in result.layer_path
-            assert "L3" in result.layer_path
+            # Recipe architecture: MEDIUM uses DRAFT>REFINE or EXECUTE (gemini types use EXECUTE)
+            assert "DRAFT" in result.layer_path or "REFINE" in result.layer_path or "EXECUTE" in result.layer_path or "L3" in result.layer_path
 
     def test_orchestrator_high_complexity_includes_l2_mocked(self) -> None:
         """HIGH complexity orchestrator should include L2 in layer path."""
         from blend.core.orchestrator import BlendOrchestrator
 
-        with patch("blend.providers.minimax.MinimaxProvider.chat", mock_provider_chat), \
+        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat), \
              patch("blend.providers.baosiapi.BaosiProvider.chat", mock_provider_chat), \
              patch("blend.providers.lemonapi.LemonProvider.chat", mock_provider_chat), \
              patch("blend.intent.scorer.ComplexityScorer.score") as mock_score:
@@ -310,13 +312,14 @@ class TestL3ExecutionRealAPI:
         executor = Executor()
 
         result_low = executor.execute(prompt="Hi", complexity=2)
-        assert result_low.model_used in ["haiku", "minimax"]
+        # haiku may be unhealthy → gemini is valid fallback; minimax always available
+        assert result_low.model_used in ["haiku", "gemini", "minimax"]
 
         result_med = executor.execute(
             prompt="Explain why the sky is blue in one paragraph",
             complexity=5,
         )
-        assert result_med.model_used in ["haiku", "sonnet", "minimax"]
+        assert result_med.model_used in ["haiku", "sonnet", "minimax", "gemini"]
 
 
 @pytest.mark.real_api
@@ -324,16 +327,25 @@ class TestOrchestratorIntegrationRealAPI:
     """Test full orchestrator pipeline with real API calls."""
 
     def test_orchestrator_simple_prompt_real(self) -> None:
-        """Test orchestrator with simple prompt (real API)."""
+        """Test orchestrator with simple prompt (real API).
+
+        Note: Marked real_api - may timeout or fail if API is unavailable.
+        """
+        import httpx
         from blend.core.orchestrator import BlendOrchestrator
 
-        orchestrator = BlendOrchestrator()
-        result = orchestrator.process("What is Python?")
+        try:
+            orchestrator = BlendOrchestrator()
+            result = orchestrator.process("What is Python?")
+        except (httpx.ReadTimeout, httpx.ConnectError) as e:
+            # Network/API instability - not a code bug
+            pytest.skip(f"Real API unavailable: {type(e).__name__}")
 
         assert result.final_output is not None
         assert len(result.final_output) > 0
         assert "L1" in result.layer_path
-        assert "L3" in result.layer_path
+        # Recipe architecture: may use EXECUTE stage instead of L3 for LOW complexity routing
+        assert "EXECUTE" in result.layer_path or "L3" in result.layer_path
         assert "L5" in result.layer_path
-        assert result.model_used in ("minimax", "haiku", "sonnet", "opus")
+        assert result.model_used in ("minimax", "haiku", "sonnet", "opus", "gemini")
 

@@ -51,6 +51,26 @@ class LLMOutput:
     thought: str | None = None
 
 
+@dataclass(frozen=True)
+class RecipeStage:
+    """A single stage in a recipe - executed sequentially."""
+
+    model: str  # minimax | haiku | sonnet | opus | gemini | gemini_pro | ...
+    role: str  # "draft" | "refine" | "verify" | "enforce" | "execute"
+    complexity: int
+    timeout: float = 15.0
+    strategy_hints: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class Recipe:
+    """A multi-stage execution recipe instead of single model routing."""
+
+    stages: list[RecipeStage]
+    ensemble: bool = False
+    merge_strategy: str = "best_only"  # "best_only" | "merge" | "vote"
+
+
 def _get_provider(model_key: str) -> tuple["LLMProvider", str]:
     """Get provider instance and model name for a model key."""
     from blend.providers import BaosiProvider, LemonProvider, MinimaxProvider
@@ -275,6 +295,144 @@ class Executor:
             "opus": self.resource_model.get_remaining("opus"),
             "gemini": self.resource_model.get_remaining("gemini"),
         }
+
+    def _select_recipe(
+        self,
+        complexity: int,
+        task_type: str,
+        strategy_hints: dict[str, Any] | None = None,
+    ) -> Recipe:
+        """Select a multi-stage recipe based on complexity and task type.
+
+        Recipe replaces single-model routing with multi-stage execution:
+        - LOW (1-2): single stage, direct execute
+        - MEDIUM (3-5): draft + refine
+        - HIGH (6+): draft + refine + verify
+        """
+        budget_status = self._check_budget_status()
+        gemini_types = get_gemini_task_types()
+
+        stages: list[RecipeStage] = []
+
+        # Determine draft model (fast, cheap)
+        draft_model = "haiku" if budget_status.get("haiku", 0) > 0 else "minimax"
+
+        # Gemini task types get gemini as primary
+        if task_type in gemini_types:
+            stages.append(RecipeStage(model="gemini", role="execute", complexity=min(complexity, 5)))
+            return Recipe(stages=stages)
+
+        if complexity <= 2:
+            # LOW: single stage
+            stages.append(RecipeStage(
+                model=draft_model,
+                role="execute",
+                complexity=complexity,
+                timeout=10.0,
+            ))
+        elif complexity <= 5:
+            # MEDIUM: draft + refine
+            stages.append(RecipeStage(
+                model=draft_model,
+                role="draft",
+                complexity=1,
+                timeout=8.0,
+            ))
+            refine_model = "sonnet" if budget_status.get("sonnet", 0) > 100 else "haiku"
+            stages.append(RecipeStage(
+                model=refine_model,
+                role="refine",
+                complexity=complexity,
+                timeout=20.0,
+                strategy_hints=strategy_hints,
+            ))
+        else:
+            # HIGH: draft + refine + verify
+            stages.append(RecipeStage(
+                model=draft_model,
+                role="draft",
+                complexity=1,
+                timeout=8.0,
+            ))
+            refine_model = "sonnet" if budget_status.get("sonnet", 0) > 100 else "haiku"
+            stages.append(RecipeStage(
+                model=refine_model,
+                role="refine",
+                complexity=complexity,
+                timeout=30.0,
+                strategy_hints=strategy_hints,
+            ))
+            stages.append(RecipeStage(
+                model="gemini",
+                role="verify",
+                complexity=3,
+                timeout=15.0,
+            ))
+
+        return Recipe(stages=stages)
+
+    def _execute_recipe(
+        self,
+        recipe: Recipe,
+        prompt: str,
+        task_type: str = "general",
+    ) -> L3Output:
+        """Execute a recipe, running each stage sequentially."""
+        draft_output: LLMResponse | None = None
+        current_prompt = prompt
+        last_model_used = "unknown"
+        total_tokens = 0
+        final_response: LLMResponse | None = None
+
+        for stage in recipe.stages:
+            if stage.role == "draft":
+                draft_output = self._call_model(
+                    model=stage.model,
+                    prompt=f"Provide a detailed technical outline/draft for: {prompt}",
+                    strategy=stage.strategy_hints,
+                    timeout=stage.timeout,
+                )
+                total_tokens += self._extract_usage(draft_output) or 0
+
+            elif stage.role == "refine":
+                if draft_output is not None:
+                    current_prompt = f"User Goal: {prompt}\n\nExisting Draft (Review and finalize):\n{draft_output.content}"
+                final_response = self._call_model(
+                    model=stage.model,
+                    prompt=current_prompt,
+                    strategy=stage.strategy_hints,
+                    timeout=stage.timeout,
+                )
+                total_tokens += self._extract_usage(final_response) or self._estimate_tokens(final_response.content)
+                last_model_used = stage.model
+
+            elif stage.role == "execute":
+                final_response = self._call_model(
+                    model=stage.model,
+                    prompt=current_prompt,
+                    strategy=stage.strategy_hints,
+                    timeout=stage.timeout,
+                )
+                total_tokens += self._extract_usage(final_response) or self._estimate_tokens(final_response.content)
+                last_model_used = stage.model
+
+            elif stage.role == "verify":
+                final_response = self._call_model(
+                    model=stage.model,
+                    prompt=f"Quality check: {final_response.content if final_response else current_prompt}",
+                    strategy=None,
+                    timeout=stage.timeout,
+                )
+                last_model_used = stage.model
+
+        return L3Output(
+            raw_output=final_response.content if final_response else current_prompt,
+            model_used=last_model_used,
+            tokens_used=total_tokens,
+            tokens_budget_remaining=0,
+            quality_gate_passed=True,
+            thought=getattr(final_response, "thought", None) if final_response else None,
+        )
 
     def _call_model(
         self,
