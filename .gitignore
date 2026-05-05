@@ -54,3 +54,6 @@ server.pid
 # Misc
 opencode/
 data/sync/
+
+# Runtime state
+.blend_health.json
