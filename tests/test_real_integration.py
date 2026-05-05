@@ -113,7 +113,7 @@ class TestL3ExecutionMocked:
         """Test L3 execution with mocked Minimax (exhaust Haiku to force Minimax)."""
         from blend.core.executor import Executor
 
-        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat):
+        with patch("blend.providers.MinimaxProvider.chat", mock_provider_chat):
             executor = Executor()
             # Exhaust haiku budget so Tier1 complexity=2 falls back to Minimax
             executor.resource_model = MagicMock()
@@ -138,7 +138,7 @@ class TestL3ExecutionMocked:
             return MockLLMResponse("Mocked response content.")
 
         with patch.multiple(
-            "blend.providers.minimax_new.MinimaxProvider",
+            "blend.providers.MinimaxProvider",
             chat=mock_chat,
         ), patch.multiple(
             "blend.providers.baosiapi.BaosiProvider",
@@ -193,7 +193,7 @@ class TestOrchestratorIntegrationMocked:
         """Test orchestrator with simple prompt (mocked providers)."""
         from blend.core.orchestrator import BlendOrchestrator
 
-        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat), \
+        with patch("blend.providers.MinimaxProvider.chat", mock_provider_chat), \
              patch("blend.providers.baosiapi.BaosiProvider.chat", mock_provider_chat), \
              patch("blend.providers.lemonapi.LemonProvider.chat", mock_provider_chat):
             orchestrator = BlendOrchestrator()
@@ -211,7 +211,7 @@ class TestOrchestratorIntegrationMocked:
         """Test orchestrator with complex prompt (mocked - eliminates flaky network calls)."""
         from blend.core.orchestrator import BlendOrchestrator
 
-        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat), \
+        with patch("blend.providers.MinimaxProvider.chat", mock_provider_chat), \
              patch("blend.providers.baosiapi.BaosiProvider.chat", mock_provider_chat), \
              patch("blend.providers.lemonapi.LemonProvider.chat", mock_provider_chat):
             orchestrator = BlendOrchestrator()
@@ -231,7 +231,7 @@ class TestOrchestratorIntegrationMocked:
         """HIGH complexity orchestrator should include L2 in layer path."""
         from blend.core.orchestrator import BlendOrchestrator
 
-        with patch("blend.providers.minimax_new.MinimaxProvider.chat", mock_provider_chat), \
+        with patch("blend.providers.MinimaxProvider.chat", mock_provider_chat), \
              patch("blend.providers.baosiapi.BaosiProvider.chat", mock_provider_chat), \
              patch("blend.providers.lemonapi.LemonProvider.chat", mock_provider_chat), \
              patch("blend.intent.scorer.ComplexityScorer.score") as mock_score:

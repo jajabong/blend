@@ -78,7 +78,7 @@ class TestProviderInitialization:
     def test_minimax_provider_works_without_env_key(self) -> None:
         """MinimaxProvider initializes without API key (reads from env)."""
         with patch.dict(os.environ, {}, clear=True):
-            from blend.providers.minimax_new import MinimaxProvider
+            from blend.providers.minimax import MinimaxProvider
 
             provider = MinimaxProvider()
             # No hardcoded fallback - key comes from env or empty
@@ -87,7 +87,7 @@ class TestProviderInitialization:
     def test_minimax_provider_with_env_key(self) -> None:
         """MinimaxProvider should work with env var API key."""
         with patch.dict(os.environ, {"MINIMAX_API_KEY": "test-key"}):
-            from blend.providers.minimax_new import MinimaxProvider
+            from blend.providers.minimax import MinimaxProvider
 
             provider = MinimaxProvider()
             assert provider._api_key == "test-key"
