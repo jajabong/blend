@@ -71,14 +71,14 @@ class ProviderPool:
 
     def _create_provider(self, provider_class_name: str) -> LLMProvider:
         """Create a new provider instance."""
+        # Import from blend.providers namespace to match test mocks
+        from blend.providers import MinimaxProvider, LemonProvider, BaosiProvider
+
         if provider_class_name == "MinimaxProvider":
-            from blend.providers.minimax import MinimaxProvider
             return MinimaxProvider()
         elif provider_class_name == "LemonProvider":
-            from blend.providers.lemonapi import LemonProvider
             return LemonProvider()
         else:
-            from blend.providers.baosiapi import BaosiProvider
             return BaosiProvider()
 
     def release(self, model_key: str) -> None:

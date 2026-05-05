@@ -99,14 +99,15 @@ class TestExecutorProviderPooling:
     def test_executor_uses_provider_pool(self):
         """Executor._get_provider should use the pool."""
         from blend.core.executor import Executor
+        from blend.core.executor import _get_provider  # Module-level function
 
         # Clear the pool first
         pool = get_provider_pool()
         pool.close_all()
 
         executor = Executor()
-        p1, _ = executor._get_provider("minimax")
-        p2, _ = executor._get_provider("minimax")
+        p1, _ = _get_provider("minimax")
+        p2, _ = _get_provider("minimax")
 
         assert p1 is p2, "Executor should reuse providers via pool"
 
