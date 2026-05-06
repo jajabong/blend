@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 load_dotenv()  # noqa: E402
 
@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from blend.config import get_mcp_servers
     get_mcp_servers.cache_clear()
 
-    from blend.core.tool_executor import register_mcp_tools, _TOOL_REGISTRY
+    from blend.core.tool_executor import _TOOL_REGISTRY, register_mcp_tools
 
     mcp_servers = get_mcp_servers()
     logger.info(f"MCP servers at startup: {mcp_servers}")

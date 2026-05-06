@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import logging
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -11,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 from blend.core.budget import ResourceModel
 from blend.core.enforcer import Enforcer
 from blend.core.executor import Executor
-from blend.core.semantic_cache import CacheResult
 from blend.core.strategy import StrategyGenerator
 from blend.core.verifier import QualityVerifier
 from blend.intent.scorer import ComplexityScorer
