@@ -62,15 +62,16 @@ app = FastAPI(
 )
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Log validation errors for debugging."""
     import logging
     logger = logging.getLogger("blend")
     logger.error(f"Validation error: {exc.errors()}")
-    logger.error(f"Request body: {await request.body()}")
+    body = await request.body()
+    logger.error(f"Request body: {body!r}")
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": (await request.body()).decode()}
+        content={"detail": exc.errors(), "body": body.decode()}
     )
 
 # Global instances
@@ -827,7 +828,7 @@ def _convert_chunk_to_anthropic_events(
         "length": "max_tokens",
         "tool_calls": "tool_use",
     }
-    mapped_reason = mapping.get(finish_reason, "end_turn")
+    mapped_reason = mapping.get(str(finish_reason) if finish_reason else "", "end_turn")
 
     if is_first:
         # 1. message_start — metadata
@@ -910,6 +911,22 @@ async def anthropic_messages(
     messages = _build_messages_from_anthropic(request.messages, request.system)
 
     if request.stream:
+        # When tools are present, use non-streaming internally to handle tool execution,
+        # then convert the final response to streaming SSE format
+        if request.tools:
+            result = orchestrator.process_messages(
+                messages=messages,
+                tools=request.tools,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature or 1.0,
+                top_p=request.top_p,
+                stop=request.stop_sequences,
+            )
+            # Convert non-streaming result to streaming SSE
+            return StreamingResponse(
+                _stream_result_as_sse(result, request.tools),
+                media_type="text/event-stream",
+            )
         return StreamingResponse(
             _stream_anthropic(messages, request.tools, request.max_tokens,
                               request.temperature, request.top_p,
@@ -985,6 +1002,145 @@ def _map_finish_reason(finish_reason: str) -> str:
     return mapping.get(finish_reason, "end_turn")
 
 
+def _stream_result_as_sse(result, tools: list[dict[str, Any]] | None) -> Generator[str, None, None]:
+    """Convert a non-streaming orchestrator result to streaming SSE format.
+
+    This is used when tools are requested in a streaming request - we execute
+    non-streaming internally (which supports tools properly) and then convert
+    the response to streaming SSE.
+    """
+    import json
+    from typing import Any
+
+    response_id = f"msg_{int(__import__('time').time() * 1000)}"
+
+    # 1. message_start
+    yield f"data: {json.dumps({
+        'type': 'message_start',
+        'message': {
+            'id': response_id,
+            'type': 'message',
+            'role': 'assistant',
+            'content': [],
+            'model': result.model_used or 'blend',
+            'stop_reason': None,
+            'stop_sequence': None,
+            'usage': {'input_tokens': 0, 'output_tokens': 0},
+        },
+    })}\n\n"
+
+    # 2. content_block_start - check if we have tool_calls
+    if result.tool_calls:
+        # Stream tool_use events
+        for idx, tc in enumerate(result.tool_calls):
+            func = tc.get("function", {})
+            name = func.get("name", "")
+            args_str = func.get("arguments", "{}")
+            if isinstance(args_str, str):
+                args = json.loads(args_str)
+            else:
+                args = args_str
+
+            yield f"data: {json.dumps({
+                'type': 'content_block_start',
+                'index': idx,
+                'content_block': {
+                    'type': 'tool_use',
+                    'name': name,
+                    'id': tc.get('id', f'toolu_{idx}'),
+                },
+            })}\n\n"
+
+            yield f"data: {json.dumps({
+                'type': 'content_block_delta',
+                'index': idx,
+                'delta': {'type': 'tool_use_input_json_delta', 'input_json': json.dumps(args)},
+            })}\n\n"
+
+        # content_block_stop
+        yield f"data: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+
+        # message_delta
+        yield f"data: {json.dumps({
+            'type': 'message_delta',
+            'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
+            'usage': {'output_tokens': 0},
+        })}\n\n"
+
+        # message_stop
+        yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+    else:
+        # No tool_calls - stream as text
+        yield f"data: {json.dumps({
+            'type': 'content_block_start',
+            'index': 0,
+            'content_block': {'type': 'text', 'text': ''},
+        })}\n\n"
+
+        # Stream the text content in chunks
+        text = result.final_output or ""
+        chunk_size = 50  # characters per chunk
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i:i+chunk_size]
+            yield f"data: {json.dumps({
+                'type': 'content_block_delta',
+                'index': 0,
+                'delta': {'type': 'text_delta', 'text': chunk},
+            })}\n\n"
+
+        # content_block_stop
+        yield f"data: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+
+        # message_delta
+        yield f"data: {json.dumps({
+            'type': 'message_delta',
+            'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
+            'usage': {'output_tokens': 0},
+        })}\n\n"
+
+        # message_stop
+        yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+
+    yield "data: [DONE]\n\n"
+
+
+def _parse_tool_call(text: str) -> tuple[str, dict[str, str]] | None:
+    """Parse tool call from text format.
+
+    Supports two formats:
+    1. [TOOL_CALL]{tool => "name", args => {\n  --key "value"\n}}[/TOOL_CALL]
+    2. <invoke="name">\n  --key "value"\n</invoke>
+
+    Returns (tool_name, args_dict) or None if parsing fails.
+    """
+    import re
+
+    # Format 1: [TOOL_CALL]{tool => "bash", args => {\n  --command "echo hello"\n}}[/TOOL_CALL]
+    if "[TOOL_CALL]" in text:
+        name_match = re.search(r'tool\s*=>\s*"([^"]+)"', text)
+        if name_match:
+            tool_name = name_match.group(1)
+            args = {}
+            arg_matches = re.findall(r'--(\w+)\s+"([^"]*)"', text)
+            for key, value in arg_matches:
+                args[key] = value
+            return tool_name, args
+        return None
+
+    # Format 2: <invoke="bash">\n  --command "echo hello"\n</invoke>
+    name_match = re.search(r'<invoke="([^"]+)"', text)
+    if name_match:
+        tool_name = name_match.group(1)
+        args = {}
+        # Extract --key "value" patterns
+        arg_matches = re.findall(r'--(\w+)\s+"([^"]*)"', text)
+        for key, value in arg_matches:
+            args[key] = value
+        return tool_name, args
+
+    return None
+
+
 def _stream_anthropic(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
@@ -997,10 +1153,18 @@ def _stream_anthropic(
 
     Features:
     - Standard SSE format for SDK compatibility
+    - Detects [TOOL_CALL]...[/TOOL_CALL] and <invoke>... text formats and converts to tool_use events
     - Minimal heartbeat for very long streams (>50 chunks)
     """
+    import re
     is_first = True
     chunk_count = 0
+    tool_call_buffer = ""  # Buffer to accumulate text for tool call parsing
+    in_tool_call = False   # True when we're inside a tool call block
+    tool_call_start_pattern = ""  # The start pattern detected ([TOOL_CALL] or <invoke="...">)
+    tool_call_end_pattern = ""   # The end pattern detected ([/TOOL_CALL] or </invoke>)
+    tool_call_index = 0    # Index for multiple tool calls
+    pending_text_before_tool = ""  # Text before tool call that should be yielded first
 
     for chunk in orchestrator.stream_messages(
         messages=messages,
@@ -1011,13 +1175,114 @@ def _stream_anthropic(
         stop=stop_sequences,
     ):
         chunk_count += 1
-        for event in _convert_chunk_to_anthropic_events(chunk, is_first=is_first):
-            # Ensure all lines are valid SSE format
-            for line in (f"data: {event}\n\n").split("\n"):
-                if line.strip() and not _is_valid_sse_line(line):
-                    # Skip invalid lines, but this shouldn't happen with _convert_chunk_to_anthropic_events
+
+        # Check if this chunk has text content that might contain tool calls
+        delta = chunk.get("delta", {})
+        content = delta.get("content", "")
+
+        if content:
+            tool_call_buffer += content
+
+            # Check for tool call start patterns
+            if not in_tool_call:
+                tool_call_start = -1
+                tool_call_end = -1
+                start_pattern = ""
+                end_pattern = ""
+
+                # Detect format 1: [TOOL_CALL]...[/TOOL_CALL]
+                if "[TOOL_CALL]" in tool_call_buffer:
+                    tool_call_start = tool_call_buffer.find("[TOOL_CALL]")
+                    start_pattern = "[TOOL_CALL]"
+                    end_pattern = "[/TOOL_CALL]"
+
+                # Detect format 2: <invoke="...">...</invoke>
+                invoke_match = re.search(r'<invoke="([^"]+)"', tool_call_buffer)
+                if invoke_match and (tool_call_start == -1 or invoke_match.start() < tool_call_start):
+                    tool_call_start = invoke_match.start()
+                    start_pattern = f'<invoke="{invoke_match.group(1)}"'
+                    end_pattern = "</invoke>"
+
+                if tool_call_start != -1:
+                    end_idx = tool_call_buffer.find(end_pattern, tool_call_start)
+
+                    # Yield any text before the tool call first
+                    if tool_call_start > 0:
+                        pending_text_before_tool += tool_call_buffer[:tool_call_start]
+
+                    if end_idx != -1:
+                        # Complete tool call block
+                        tool_call_text = tool_call_buffer[tool_call_start + len(start_pattern):end_idx]
+                        tool_call_buffer = tool_call_buffer[end_idx + len(end_pattern):]
+
+                        # Parse and emit tool call
+                        parsed = _parse_tool_call(start_pattern + tool_call_text + end_pattern)
+                        if parsed:
+                            tool_name, args = parsed
+
+                            # Emit any pending text before the tool call
+                            if pending_text_before_tool.strip():
+                                yield f"data: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': pending_text_before_tool}})}\n\n"
+                                pending_text_before_tool = ""
+
+                            yield f"data: {json.dumps({'type': 'content_block_start', 'index': tool_call_index, 'content_block': {'type': 'tool_use', 'name': tool_name, 'id': f'toolu_{tool_call_index}'}})}\n\n"
+                            yield f"data: {json.dumps({'type': 'content_block_delta', 'index': tool_call_index, 'delta': {'type': 'tool_use_input_json_delta', 'input_json': json.dumps(args)}})}\n\n"
+                            yield f"data: {json.dumps({'type': 'content_block_stop', 'index': tool_call_index})}\n\n"
+                            yield f"data: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 0}})}\n\n"
+                            yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+                            tool_call_index += 1
+
+                        # Process any remaining buffer
+                        if tool_call_buffer:
+                            pending_text_before_tool += tool_call_buffer
+                            tool_call_buffer = ""
+                        continue
+                    else:
+                        # Incomplete tool call - wait for more
+                        in_tool_call = True
+                        tool_call_start_pattern = start_pattern
+                        tool_call_end_pattern = end_pattern
+                        tool_call_buffer = tool_call_buffer[tool_call_start + len(start_pattern):]
+                        continue
+
+            # If we're in a tool call block and getting more text
+            if in_tool_call:
+                end_idx = tool_call_buffer.find(tool_call_end_pattern)
+                if end_idx != -1:
+                    # Complete block received
+                    tool_call_text = tool_call_buffer[:end_idx]
+                    tool_call_buffer = tool_call_buffer[end_idx + len(tool_call_end_pattern):]
+                    in_tool_call = False
+
+                    parsed = _parse_tool_call(tool_call_start_pattern + tool_call_text + tool_call_end_pattern)
+                    if parsed:
+                        tool_name, args = parsed
+
+                        if pending_text_before_tool.strip():
+                            yield f"data: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': pending_text_before_tool}})}\n\n"
+                            pending_text_before_tool = ""
+
+                        yield f"data: {json.dumps({'type': 'content_block_start', 'index': tool_call_index, 'content_block': {'type': 'tool_use', 'name': tool_name, 'id': f'toolu_{tool_call_index}'}})}\n\n"
+                        yield f"data: {json.dumps({'type': 'content_block_delta', 'index': tool_call_index, 'delta': {'type': 'tool_use_input_json_delta', 'input_json': json.dumps(args)}})}\n\n"
+                        yield f"data: {json.dumps({'type': 'content_block_stop', 'index': tool_call_index})}\n\n"
+                        yield f"data: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 0}})}\n\n"
+                        yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+                        tool_call_index += 1
+
+                    if tool_call_buffer:
+                        pending_text_before_tool += tool_call_buffer
+                        tool_call_buffer = ""
                     continue
-            yield f"data: {event}\n\n"
+                else:
+                    continue
+
+        # For non-content chunks or when not in tool call mode, use normal processing
+        if not content or not in_tool_call:
+            for event in _convert_chunk_to_anthropic_events(chunk, is_first=is_first):
+                for line in (f"data: {event}\n\n").split("\n"):
+                    if line.strip() and not _is_valid_sse_line(line):
+                        continue
+                yield f"data: {event}\n\n"
         is_first = False
 
     yield "data: [DONE]\n\n"

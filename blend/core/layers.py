@@ -1,13 +1,20 @@
 """Five-layer architecture for blend."""
 
-from dataclasses import dataclass
+from __future__ import annotations
 
-try:
+from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     from enum import StrEnum
-except ImportError:
-    from enum import Enum
-    class StrEnum(str, Enum):
-        """StrEnum fallback for Python < 3.11."""
+else:
+    try:
+        from enum import StrEnum
+    except ImportError:  # pragma: no cover
+
+        class StrEnum(str, Enum):
+            """StrEnum fallback for Python < 3.11."""
 
 
 class Layer(StrEnum):

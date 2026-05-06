@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import re
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -43,7 +44,7 @@ def _is_blocked_url(url: str) -> str | None:
     Returns None if allowed, or an error string if blocked.
     """
     try:
-        parsed = urllib.request.urlparse(url)
+        parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return f"Only HTTP/HTTPS allowed, got '{parsed.scheme}'"
 
@@ -323,7 +324,7 @@ def _calc_handler(arguments: dict[str, Any] | str) -> str:
         raise ToolError(f"Syntax error: {e}")
 
     # Define safe operations
-    safe_ops = {
+    safe_ops: dict[type[ast.operator] | type[ast.unaryop], Any] = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
         ast.Mult: operator.mul,
@@ -356,16 +357,16 @@ def _calc_handler(arguments: dict[str, Any] | str) -> str:
                 # Preserve int for power of ints with whole result
                 if type(op) is ast.Pow and isinstance(lv, int) and isinstance(rv, int):
                     return int(result)
-                return result
+                return result  # type: ignore[no-any-return]
             case ast.UnaryOp(op=op, operand=operand) if type(op) in safe_ops:
-                return safe_ops[type(op)](eval_node(operand))
+                return safe_ops[type(op)](eval_node(operand))  # type: ignore[no-any-return]
             case ast.Call(func=func, args=[arg]) if (
                 isinstance(func, ast.Attribute) and
                 func.attr in ("sqrt",) and
                 isinstance(func.value, ast.Name) and
                 func.value.id == "math"
             ):
-                return getattr(math, func.attr)(eval_node(arg))
+                return getattr(math, func.attr)(eval_node(arg))  # type: ignore[no-any-return]
             case _:
                 raise ToolError(f"Unsupported expression node: {ast.dump(node)}")
 

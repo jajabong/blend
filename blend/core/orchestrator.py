@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from blend.core.budget import ResourceModel
 from blend.core.enforcer import Enforcer
@@ -53,7 +53,7 @@ class BlendOrchestrator:
         from blend.core.semantic_cache import SemanticCache
         self.cache = SemanticCache(max_entries=1000)
 
-    def _smart_compress(self, *args, **kwargs) -> bool:
+    def _smart_compress(self, *args: Any, **kwargs: Any) -> bool:
         """Legacy placeholder."""
         return False
 
@@ -94,15 +94,16 @@ class BlendOrchestrator:
         cache_result = self.cache.get(prompt, task_type)
         if cache_result.hit:
             layer_path_parts.extend(["CACHE", "L5"])
+            response = cache_result.response or ""
             verification = self.verifier.verify(
-                output=cache_result.response,
+                output=response,
                 quality_level=tier,
                 layer_path=">".join(layer_path_parts),
-                output_tokens=len(cache_result.response) // 4,
+                output_tokens=len(response) // 4,
                 task_type=task_type,
             )
             return OrchestratorResult(
-                final_output=cache_result.response,
+                final_output=response,
                 layer_path=">".join(layer_path_parts),
                 complexity=complexity,
                 model_used=cache_result.model_used or "cached",
@@ -344,6 +345,8 @@ User's Original Goal: {prompt}"""
         layer_path_parts.append("L3")
         layer_path_parts.append("L5")
 
+        # l3_output is always set after the execution loop
+        assert l3_output is not None
         final_output = l3_output.content
         verification = self.verifier.verify(
             output=final_output,
@@ -408,22 +411,34 @@ User's Original Goal: {prompt}"""
             elif isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
-                        return item.get("text", "")
+                        return str(item.get("text", ""))
             return ""
 
-        last_user_msg = next((_extract_text(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"), "")
+        # Check if client already executed tools (role: "tool" messages present)
+        client_executed_tools = any(m.get("role") == "tool" for m in messages)
+
+        # Filter messages for streaming - remove tool results if client executed them
+        if client_executed_tools:
+            stream_messages = [m for m in messages if m.get("role") != "tool"]
+            # Don't pass tools to executor since client already executed them
+            stream_kwargs = {k: v for k, v in kwargs.items() if k != "tools"}
+        else:
+            stream_messages = list(messages)
+            stream_kwargs = kwargs
+
+        last_user_msg = next((_extract_text(m.get("content", "")) for m in reversed(stream_messages) if m.get("role") == "user"), "")
         score = self.scorer.score(last_user_msg)
 
         # 2. Generate strategy if high complexity
-        strategy = None
+        strategy: dict[str, Any] | None = None
         if score.tier == "HIGH":
             strategy = {"plan": self.strategy.generate(last_user_msg, score.total).output.plan}
 
-        return self.executor.stream_messages(messages=messages, complexity=score.total, strategy=strategy, **kwargs)
+        return self.executor.stream_messages(messages=stream_messages, complexity=score.total, strategy=strategy, **stream_kwargs)
 
     def stream(self, prompt: str, **kwargs: Any) -> Generator[Any, None, None]:
         score = self.scorer.score(prompt)
-        strategy = None
+        strategy: dict[str, Any] | None = None
         if score.tier == "HIGH":
             strategy = {"plan": self.strategy.generate(prompt, score.total).output.plan}
         return self.executor.stream(prompt=prompt, strategy=strategy, **kwargs)

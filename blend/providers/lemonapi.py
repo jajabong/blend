@@ -1,7 +1,7 @@
 """LemonAPI Provider - Gemini models."""
 
 import time
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -128,7 +128,7 @@ class LemonProvider:
             client = self._get_client()
             resp = client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
-            return resp.json()
+            return cast(dict[str, Any], resp.json())
 
         data = _retry_request(_do_request, provider_name="lemon")
         msg = data["choices"][0]["message"]

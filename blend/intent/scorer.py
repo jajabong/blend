@@ -1,13 +1,20 @@
 """L1 Complexity Scorer - Scores prompt complexity from 1-10."""
 
-from dataclasses import dataclass
+from __future__ import annotations
 
-try:
+from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     from enum import StrEnum
-except ImportError:
-    from enum import Enum
-    class StrEnum(str, Enum):
-        """StrEnum fallback for Python < 3.11."""
+else:
+    try:
+        from enum import StrEnum
+    except ImportError:  # pragma: no cover
+
+        class StrEnum(str, Enum):
+            """StrEnum fallback for Python < 3.11."""
 
 
 class ComplexityTier(StrEnum):

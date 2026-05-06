@@ -663,15 +663,30 @@ Final Output:
             except Exception: continue
 
         # If tools were passed and all providers failed, retry without tools
-        # (minimax doesn't support streaming + tools properly)
+        # Also convert list content to string since providers don't handle list format well
         if tools:
             kwargs_without_tools = {k: v for k, v in kwargs.items() if k != "tools"}
+            tried = []  # Reset tried list for retry loop
+            # Convert list content (from Anthropic format) to string
+            converted_msgs = []
+            for m in msgs:
+                msg_copy = dict(m)
+                content = msg_copy.get("content")
+                if isinstance(content, list):
+                    # Extract text from [{"type": "text", "text": "..."}]
+                    text_parts = []
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                    msg_copy["content"] = "\n".join(text_parts)
+                converted_msgs.append(msg_copy)
+
             for model_key in [selection.primary] + selection.fallback:
                 if model_key in tried: continue
                 tried.append(model_key)
                 try:
                     provider, model_name = _get_provider(model_key)
-                    chunks = provider.chat_stream(messages=msgs, model=model_name, **kwargs_without_tools)
+                    chunks = provider.chat_stream(messages=converted_msgs, model=model_name, **kwargs_without_tools)
                     for chunk_json in chunks:
                         try:
                             delta = json.loads(chunk_json)

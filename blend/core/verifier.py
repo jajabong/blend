@@ -5,14 +5,21 @@ Note: L5 is the final (4th) layer in the actual 4-layer architecture:
 L4 was removed due to negative ROI (+18s latency for $0.003 savings).
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
 
-try:
+from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     from enum import StrEnum
-except ImportError:
-    from enum import Enum
-    class StrEnum(str, Enum):
-        """StrEnum fallback for Python < 3.11."""
+else:
+    try:
+        from enum import StrEnum
+    except ImportError:  # pragma: no cover
+
+        class StrEnum(str, Enum):
+            """StrEnum fallback for Python < 3.11."""
 
 
 class QualityGate(StrEnum):
