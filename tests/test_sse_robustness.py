@@ -44,10 +44,29 @@ class TestSSEFormatHelpers:
 
 @pytest.mark.integration
 class TestSSEStreamRobustness:
-    """Test SSE stream format standardization and error handling via curl."""
+    """Test SSE stream format standardization and error handling via curl.
 
+    These tests require a running blend server on localhost:8000.
+    Run with: python3 -m uvicorn blend.api:app --host 0.0.0.0 --port 8000
+    """
+
+    def _check_server_running(self) -> bool:
+        """Check if the blend server is running."""
+        import socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(('localhost', 8000))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
+    @pytest.mark.integration
     def test_stream_via_curl_standard_sse_format(self) -> None:
         """Use curl to verify streaming produces valid SSE format."""
+        if not self._check_server_running():
+            pytest.skip("Server not running on localhost:8000")
         import subprocess
         result = subprocess.run([
             'curl', '-s', '-N', '-X', 'POST', 'http://localhost:8000/v1/chat/completions',
@@ -61,8 +80,11 @@ class TestSSEStreamRobustness:
             if line.strip():  # Skip empty lines
                 assert line.startswith("data: ") or line.startswith(":"), f"Invalid SSE format: {line!r}"
 
+    @pytest.mark.integration
     def test_stream_via_curl_ends_with_done(self) -> None:
         """Use curl to verify stream ends with data: [DONE]."""
+        if not self._check_server_running():
+            pytest.skip("Server not running on localhost:8000")
         import subprocess
         result = subprocess.run([
             'curl', '-s', '-N', '-X', 'POST', 'http://localhost:8000/v1/chat/completions',
@@ -77,8 +99,22 @@ class TestSSEStreamRobustness:
 class TestAnthropicStreamFormat:
     """Test Anthropic /v1/messages endpoint SSE format."""
 
+    def _check_server_running(self) -> bool:
+        """Check if the blend server is running."""
+        import socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(('localhost', 8000))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
     def test_anthropic_stream_via_curl(self) -> None:
         """Use curl to verify Anthropic streaming format."""
+        if not self._check_server_running():
+            pytest.skip("Server not running on localhost:8000")
         import subprocess
         result = subprocess.run([
             'curl', '-s', '-N', '-X', 'POST', 'http://localhost:8000/v1/messages',
@@ -89,6 +125,7 @@ class TestAnthropicStreamFormat:
         ], capture_output=True, text=True, timeout=30)
 
         lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+        assert len(lines) > 0, f"Server returned empty response: {result.stderr or 'no error'}"
         for line in lines:
             if line.strip():
                 assert line.startswith("data: ") or line.startswith(":"), f"Invalid SSE format: {line!r}"

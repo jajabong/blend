@@ -15,19 +15,20 @@ Cassettes are stored in tests/cassettes/ directory.
 from __future__ import annotations
 
 import os
+import pytest
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # Check if recording is enabled
 RECORD_MODE = os.environ.get("BLEND_CASSETTE_MODE") == "record" or os.environ.get("BLEND_RECORD_CASSETTES") == "1"
 
-# Skip these tests if not in a real API environment
+# Skip these tests if no cassette exists and not in record mode
+_cassette_exists = (Path(__file__).parent / "cassettes" / "minimax_chat.yaml").exists()
+
 SKIP_IF_NO_KEYS = pytest.mark.skipif(
-    not os.environ.get("MINIMAX_API_KEY"),
-    reason="MINIMAX_API_KEY not set - cassette tests require real API"
+    not _cassette_exists and not RECORD_MODE,
+    reason="No cassette found and not in record mode"
 )
 
 
