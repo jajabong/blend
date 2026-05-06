@@ -241,7 +241,24 @@ class Executor:
                 if not futures:
                     break
 
-        # Last resort
+        # Last resort - skip tools for minimax since it doesn't support them properly
+        if tools:
+            # Minimax doesn't support tools properly, so retry without tools
+            return self._call_model_messages(
+                model="minimax",
+                messages=messages,
+                strategy=strategy,
+                tools=None,  # Don't pass tools to minimax
+                tool_choice=tool_choice,
+                response_format=response_format,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+                stop=stop,
+                timeout=15.0,
+            )
         return _try_one("minimax", False)
 
     def _select_model(
