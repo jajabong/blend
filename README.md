@@ -50,15 +50,28 @@ curl http://localhost:8000/health
 ```
 用户请求
     ↓
-L1: Minimax 评分 + 免费技术草稿 (DRAFT)
+L1: 复杂度评分 + 意图检测
     ↓
-L2: 高级策略生成 (仅 HIGH 复杂度)
+L2: 策略生成 (仅 HIGH 复杂度)
     ↓
-L3: 并行赛跑执行 (Sonnet/Gemini/Minimax)
+L3: Recipe 执行 (DRAFT → REFINE → VERIFY)
     ↓
-L5: 质检 + 带反馈自愈 (RETRY)
+L5: 质量验证 + 自愈纠错
     ↓
-优雅交付 (带伤通过 或 完美 Success)
+优雅交付
+```
+
+## Docker 部署
+
+```bash
+# 构建并启动
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f blend
+
+# 停止服务
+docker-compose down
 ```
 
 ## 许可证
