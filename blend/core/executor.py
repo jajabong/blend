@@ -661,4 +661,28 @@ Final Output:
                     except Exception: continue
                 return
             except Exception: continue
+
+        # If tools were passed and all providers failed, retry without tools
+        # (minimax doesn't support streaming + tools properly)
+        if tools:
+            kwargs_without_tools = {k: v for k, v in kwargs.items() if k != "tools"}
+            for model_key in [selection.primary] + selection.fallback:
+                if model_key in tried: continue
+                tried.append(model_key)
+                try:
+                    provider, model_name = _get_provider(model_key)
+                    chunks = provider.chat_stream(messages=msgs, model=model_name, **kwargs_without_tools)
+                    for chunk_json in chunks:
+                        try:
+                            delta = json.loads(chunk_json)
+                            if not isinstance(delta, dict): continue
+                            choices = delta.get("choices", [])
+                            if not choices: continue
+                            choice = choices[0]
+                            result = {"delta": choice.get("delta", {}), "finish_reason": choice.get("finish_reason")}
+                            yield result
+                        except Exception: continue
+                    return
+                except Exception: continue
+
         raise RuntimeError("All model providers failed")

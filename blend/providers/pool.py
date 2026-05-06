@@ -75,11 +75,11 @@ class ProviderPool:
         from blend.providers import BaosiProvider, LemonProvider, MinimaxProvider
 
         if provider_class_name == "MinimaxProvider":
-            return MinimaxProvider()
+            return MinimaxProvider()  # type: ignore[return-value]
         elif provider_class_name == "LemonProvider":
-            return LemonProvider()
+            return LemonProvider()  # type: ignore[return-value]
         else:
-            return BaosiProvider()
+            return BaosiProvider()  # type: ignore[return-value]
 
     def release(self, model_key: str) -> None:
         """Release a provider reference (close if no longer needed)."""

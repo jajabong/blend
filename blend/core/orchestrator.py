@@ -401,7 +401,17 @@ User's Original Goal: {prompt}"""
 
     def stream_messages(self, messages: list[dict[str, Any]], **kwargs: Any) -> Generator[Any, None, None]:
         # 1. Calculate complexity from the last user message
-        last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user" and isinstance(m["content"], str)), "")
+        # Handle list content from tool results: [{"type": "text", "text": "..."}]
+        def _extract_text(content: Any) -> str:
+            if isinstance(content, str):
+                return content
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        return item.get("text", "")
+            return ""
+
+        last_user_msg = next((_extract_text(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"), "")
         score = self.scorer.score(last_user_msg)
 
         # 2. Generate strategy if high complexity

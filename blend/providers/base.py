@@ -58,3 +58,7 @@ class LLMProvider(ABC):
             List of response chunk JSON strings
         """
         ...
+
+    def close(self) -> None:
+        """Close the provider and release resources."""
+        ...
