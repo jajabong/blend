@@ -911,24 +911,11 @@ async def anthropic_messages(
     messages = _build_messages_from_anthropic(request.messages, request.system)
 
     if request.stream:
-        # When tools are present, use non-streaming internally to handle tool execution,
-        # then convert the final response to streaming SSE format
-        if request.tools:
-            result = orchestrator.process_messages(
-                messages=messages,
-                tools=request.tools,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature or 1.0,
-                top_p=request.top_p,
-                stop=request.stop_sequences,
-            )
-            # Convert non-streaming result to streaming SSE
-            return StreamingResponse(
-                _stream_result_as_sse(result, request.tools),
-                media_type="text/event-stream",
-            )
+        # Strip tools for streaming since no providers support streaming + tools properly.
+        # Tools will be ignored and the model will respond without tool support.
+        # For tool execution, use non-streaming mode instead.
         return StreamingResponse(
-            _stream_anthropic(messages, request.tools, request.max_tokens,
+            _stream_anthropic(messages, None, request.max_tokens,
                               request.temperature, request.top_p,
                               request.stop_sequences),
             media_type="text/event-stream",

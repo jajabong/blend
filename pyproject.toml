@@ -57,3 +57,7 @@ disallow_untyped_defs = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests requiring running server",
+    "real_api: marks tests requiring real API credentials",
+]
