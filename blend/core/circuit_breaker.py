@@ -18,8 +18,8 @@ class CircuitState(Enum):
     HALF_OPEN = "half_open"  # Testing recovery
 
 
-# Global disable flag - set via environment variable
-DISABLE_CIRCUIT_BREAKER = os.environ.get("DISABLE_CIRCUIT_BREAKER", "").lower() in ("true", "1", "yes")
+# Global disable flag - defaults to True (circuit breakers disabled)
+DISABLE_CIRCUIT_BREAKER = os.environ.get("DISABLE_CIRCUIT_BREAKER", "true").lower() in ("true", "1", "yes")
 
 
 class CircuitBreaker:
