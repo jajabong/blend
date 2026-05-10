@@ -14,6 +14,7 @@ def estimate_tokens_from_messages(messages: list[dict[str, Any]]) -> int:
 
     Returns:
         Estimated token count
+
     """
     total = 0
     for msg in messages:
@@ -50,6 +51,7 @@ def truncate_messages(
 
     Returns:
         Truncated message list preserving recent messages
+
     """
     if not messages:
         return []
@@ -90,7 +92,7 @@ def _estimate_single_message_tokens(msg: dict[str, Any]) -> int:
                 else:
                     total += 50
         return total
-    elif isinstance(content, str):
+    if isinstance(content, str):
         return len(content) // 4
     return 10
 
@@ -109,6 +111,7 @@ def check_context_budget(
 
     Returns:
         True if within budget, False if truncation recommended
+
     """
     tokens = estimate_tokens_from_messages(messages)
     return tokens <= int(context_limit * usage_percent)

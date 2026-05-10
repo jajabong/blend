@@ -18,8 +18,8 @@ class CircuitState(Enum):
     HALF_OPEN = "half_open"  # Testing recovery
 
 
-# Global disable flag - defaults to True (circuit breakers disabled)
-DISABLE_CIRCUIT_BREAKER = os.environ.get("DISABLE_CIRCUIT_BREAKER", "true").lower() in ("true", "1", "yes")
+# Global disable flag - defaults to False (circuit breakers ENABLED)
+DISABLE_CIRCUIT_BREAKER = os.environ.get("DISABLE_CIRCUIT_BREAKER", "false").lower() in ("true", "1", "yes")
 
 
 class CircuitBreaker:
@@ -101,16 +101,16 @@ class CircuitBreaker:
             self._lockout_duration = self.base_recovery_timeout
 
     def record_failure(self, error_code: int | None = None) -> None:
-        """Record failure with error triage.
-
-        If already in HALF_OPEN (probe failed), immediately trip back to OPEN.
-        """
+        """Record failure with error triage."""
         # Disabled via environment variable - don't record failures
         if DISABLE_CIRCUIT_BREAKER:
             return
         with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
+
+            # Debug
+            # print(f"DEBUG: Breaker {self.name} record_failure {error_code}, count={self._failure_count}")
 
             # If we were probing (HALF_OPEN) and probe failed, go back to OPEN
             if self._state == CircuitState.HALF_OPEN:
@@ -133,7 +133,7 @@ class CircuitBreaker:
                     # Exponential backoff for generic failures
                     self._lockout_duration = min(
                         self.base_recovery_timeout * (2 ** self._consecutive_trips),
-                        3600 * 24 # Max 1 day
+                        3600 * 24, # Max 1 day
                     )
                 self._state = CircuitState.OPEN
 
@@ -181,7 +181,7 @@ class CircuitBreakerRegistry:
                 self._breakers[name] = CircuitBreaker(
                     name=name,
                     failure_threshold=kwargs.get("failure_threshold", 5),
-                    base_recovery_timeout=kwargs.get("base_recovery_timeout", 30.0)
+                    base_recovery_timeout=kwargs.get("base_recovery_timeout", 30.0),
                 )
             return self._breakers[name]
 

@@ -7,6 +7,7 @@ L4 was removed due to negative ROI (+18s latency for $0.003 savings).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -86,6 +87,8 @@ class QualityVerifier:
         r"SELECT\s+.*\s+FROM\s+",
         r"DROP\s+TABLE\s+",
         r"DELETE\s+FROM\s+",
+        r"input\s*\(",
+        r"compile\s*\(",
     ]
 
     # Code security patterns (redteam-style)
@@ -146,6 +149,7 @@ class QualityVerifier:
 
         Returns:
             VerificationResult with pass/fail and gates checked
+
         """
         gates: dict[str, bool] = {}
 
@@ -182,11 +186,12 @@ class QualityVerifier:
 
         # Gate 8: Layer path valid
         gates[QualityGate.LAYER_PATH_VALID] = self._is_valid_path(
-            layer_path, quality_level, expected_path
+            layer_path, quality_level, expected_path,
         )
 
         # Gate 9: Gemini quality assessment (HIGH complexity only)
-        if quality_level == "HIGH":
+        # Can be disabled via BLEND_DISABLE_GEMINI_VERIFY=1 for cost savings
+        if quality_level == "HIGH" and not os.environ.get("BLEND_DISABLE_GEMINI_VERIFY"):
             gemini_result = self.gemini_evaluate(output, quality_level)
             gates[QualityGate.GEMINI_QUALITY] = bool(gemini_result["passed"])
         else:
@@ -225,6 +230,7 @@ class QualityVerifier:
 
         Returns:
             dict with passed, relevance, accuracy, completeness, issues
+
         """
         import json
         import re
@@ -404,6 +410,8 @@ class QualityVerifier:
             ("const ", "const"),  # Has const
             ("let ", "let"),  # Has let
             ("var ", "var"),  # Has var
+            ("try:", "try:"),  # Has try-except
+            ("except", "except"),  # Has exception handling
         ]
 
         # Count opening/closing brackets
@@ -476,10 +484,9 @@ class QualityVerifier:
         # Default validation rules
         if quality_level == "HIGH":
             return "L1" in path and "L2" in path and "L5" in path
-        elif quality_level == "MEDIUM":
+        if quality_level == "MEDIUM":
             return "L1" in path and "L5" in path
-        else:
-            return "L1" in path and "L5" in path
+        return "L1" in path and "L5" in path
 
     def _get_rejection_reason(self, gates: dict[str, bool]) -> str:
         """Get rejection reason from failed gates."""

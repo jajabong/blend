@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
+from typing import Any, Optional, Union
 
 import httpx
 from dotenv import load_dotenv
@@ -23,7 +23,7 @@ from blend.core.orchestrator import BlendOrchestrator  # noqa: E402
 
 # Validate required configuration on startup
 try:
-    require_keys("MINIMAX_API_KEY", "BAOSI_API_KEY", "LEMON_API_KEY")
+    require_keys("MINIMAX_API_KEYS", "BAOSI_API_KEY", "LEMON_API_KEY")
 except ValueError as e:
     import warnings
 
@@ -83,9 +83,9 @@ class Message(BaseModel):
     """Chat message."""
 
     role: str
-    content: str | list[dict[str, Any]] | None = None  # Optional for tool calls messages
-    tool_call_id: str | None = None
-    name: str | None = None
+    content: Optional[Union[str, list[dict[str, Any]]]] = None  # Optional for tool calls messages
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
 
 
 # ─── Anthropic Messages API Models ─────────────────────────────────────────────
@@ -110,7 +110,7 @@ class ToolParam(BaseModel):
     """Tool parameter schema."""
 
     name: str
-    description: str | None = None
+    description: Optional[str] = None
     input_schema: dict[str, Any]
 
 
@@ -118,16 +118,16 @@ class AnthropicMessageRequest(BaseModel):
     """Anthropic Messages API request — Claude Code compatible."""
 
     model: str
-    max_tokens: int | None = None
+    max_tokens: Optional[int] = None
     messages: list[dict[str, Any]]
     stream: bool = False
-    system: str | list[dict[str, Any]] | None = None
-    tools: list[dict[str, Any]] | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    top_k: int | None = None
-    stop_sequences: list[str] | None = None
-    metadata: dict[str, Any] | None = None
+    system: Optional[Union[str, list[dict[str, Any]]]] = None
+    tools: Optional[list[dict[str, Any]]] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    stop_sequences: Optional[list[str]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 class AnthropicUsage(BaseModel):
@@ -135,8 +135,8 @@ class AnthropicUsage(BaseModel):
 
     input_tokens: int
     output_tokens: int
-    cache_creation_input_tokens: int | None = None
-    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: Optional[int] = None
+    cache_read_input_tokens: Optional[int] = None
 
 
 class AnthropicMessageResponse(BaseModel):
@@ -148,8 +148,8 @@ class AnthropicMessageResponse(BaseModel):
     content: list[dict[str, Any]]
     model: str
     usage: dict[str, int]
-    stop_reason: str | None = None
-    stop_sequence: str | None = None
+    stop_reason: Optional[str] = None
+    stop_sequence: Optional[str] = None
 
 
 class AnthropicStreamingEvent(BaseModel):
@@ -170,20 +170,20 @@ class ChatCompletionRequest(BaseModel):
     model: str = "blend"  # blend auto-routes
     messages: list[Message]
     stream: bool = False
-    max_tokens: int | None = None
-    max_completion_tokens: int | None = None  # OpenAI reasoning models
-    reasoning_effort: str | None = None  # OpenAI reasoning effort (low/medium/high)
+    max_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = None  # OpenAI reasoning models
+    reasoning_effort: Optional[str] = None  # OpenAI reasoning effort (low/medium/high)
     temperature: float = 1.0
-    top_p: float | None = None
-    presence_penalty: float | None = None
-    frequency_penalty: float | None = None
-    stop: str | list[str] | None = None
-    tools: list[dict[str, Any]] | None = None
-    tool_choice: str | dict[str, Any] | None = None
-    response_format: dict[str, Any] | None = None
+    top_p: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    stop: Optional[Union[str, list[str]]] = None
+    tools: Optional[list[dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None
+    response_format: Optional[dict[str, Any]] = None
     agent_mode: bool = False
-    mcp_servers: list[dict[str, Any]] | None = None
-    stream_options: dict[str, Any] | None = None  # OpenAI stream options
+    mcp_servers: Optional[list[dict[str, Any]]] = None
+    stream_options: Optional[dict[str, Any]] = None  # OpenAI stream options
 
 
 def process_through_layers(prompt: str) -> tuple[str, dict[str, Any]]:
@@ -997,12 +997,12 @@ def _stream_result_as_sse(result, tools: list[dict[str, Any]] | None) -> Generat
     the response to streaming SSE.
     """
     import json
-    from typing import Any
+    from typing import Any, Optional, Union
 
     response_id = f"msg_{int(__import__('time').time() * 1000)}"
 
     # 1. message_start
-    yield f"data: {json.dumps({
+    msg_start = {
         'type': 'message_start',
         'message': {
             'id': response_id,
@@ -1014,7 +1014,8 @@ def _stream_result_as_sse(result, tools: list[dict[str, Any]] | None) -> Generat
             'stop_sequence': None,
             'usage': {'input_tokens': 0, 'output_tokens': 0},
         },
-    })}\n\n"
+    }
+    yield f"data: {json.dumps(msg_start)}\n\n"
 
     # 2. content_block_start - check if we have tool_calls
     if result.tool_calls:
@@ -1028,7 +1029,7 @@ def _stream_result_as_sse(result, tools: list[dict[str, Any]] | None) -> Generat
             else:
                 args = args_str
 
-            yield f"data: {json.dumps({
+            cb_start = {
                 'type': 'content_block_start',
                 'index': idx,
                 'content_block': {
@@ -1036,54 +1037,60 @@ def _stream_result_as_sse(result, tools: list[dict[str, Any]] | None) -> Generat
                     'name': name,
                     'id': tc.get('id', f'toolu_{idx}'),
                 },
-            })}\n\n"
+            }
+            yield f"data: {json.dumps(cb_start)}\n\n"
 
-            yield f"data: {json.dumps({
+            cb_delta = {
                 'type': 'content_block_delta',
                 'index': idx,
                 'delta': {'type': 'tool_use_input_json_delta', 'input_json': json.dumps(args)},
-            })}\n\n"
+            }
+            yield f"data: {json.dumps(cb_delta)}\n\n"
 
         # content_block_stop
         yield f"data: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
 
         # message_delta
-        yield f"data: {json.dumps({
+        msg_delta = {
             'type': 'message_delta',
             'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
             'usage': {'output_tokens': 0},
-        })}\n\n"
+        }
+        yield f"data: {json.dumps(msg_delta)}\n\n"
 
         # message_stop
         yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
     else:
         # No tool_calls - stream as text
-        yield f"data: {json.dumps({
+        cb_start = {
             'type': 'content_block_start',
             'index': 0,
             'content_block': {'type': 'text', 'text': ''},
-        })}\n\n"
+        }
+        yield f"data: {json.dumps(cb_start)}\n\n"
 
         # Stream the text content in chunks
         text = result.final_output or ""
         chunk_size = 50  # characters per chunk
         for i in range(0, len(text), chunk_size):
             chunk = text[i:i+chunk_size]
-            yield f"data: {json.dumps({
+            cb_delta = {
                 'type': 'content_block_delta',
                 'index': 0,
                 'delta': {'type': 'text_delta', 'text': chunk},
-            })}\n\n"
+            }
+            yield f"data: {json.dumps(cb_delta)}\n\n"
 
         # content_block_stop
         yield f"data: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
 
         # message_delta
-        yield f"data: {json.dumps({
+        msg_delta = {
             'type': 'message_delta',
             'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
             'usage': {'output_tokens': 0},
-        })}\n\n"
+        }
+        yield f"data: {json.dumps(msg_delta)}\n\n"
 
         # message_stop
         yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"

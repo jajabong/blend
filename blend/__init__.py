@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 _project_root = Path(__file__).parent.parent
 load_dotenv(_project_root / ".env")
 
-from blend.core.orchestrator import BlendOrchestrator, OrchestratorResult  # noqa: E402
+from blend.core.orchestrator import BlendOrchestrator, OrchestratorResult
 
 __version__ = "2.1.0"
 __author__ = "Blend Team"

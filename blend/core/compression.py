@@ -26,6 +26,7 @@ class CompressionTrigger:
         Args:
             threshold: Token count above which compression triggers (default 1000,
                 aligned with L5 Gate 6 threshold).
+
         """
         self.threshold = threshold
 
@@ -38,6 +39,7 @@ class CompressionTrigger:
 
         Returns:
             True if compression should be applied
+
         """
         if agent_mode:
             return False

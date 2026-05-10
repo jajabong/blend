@@ -95,6 +95,50 @@ def _is_blocked_url(url: str) -> str | None:
 _TOOL_REGISTRY: dict[str, dict[str, Any]] = {}
 
 
+# Tools that should NOT be returned to client for execution
+# These are Claude Code internal tools that don't exist in the client's environment
+# NOTE: todowrite is now registered with _todowrite_handler, so it will be
+# executed server-side and its result returned to the model
+_INTERNAL_TOOLS: set[str] = set()
+
+
+def are_tools_registered(tools: list[dict[str, Any]]) -> bool:
+    """Check if all tools in the list are registered in the tool executor.
+
+    Args:
+        tools: List of tool definitions from the client
+
+    Returns:
+        True if all tools are registered (can be executed server-side),
+        False if any tool is not registered (client should execute them)
+
+    """
+    if not tools:
+        return True
+
+    for tool in tools:
+        t_func = tool.get("function", {})
+        tool_name = t_func.get("name")
+        # Don't require internal Claude Code tools to be registered
+        if tool_name and tool_name in _INTERNAL_TOOLS:
+            continue
+        if tool_name and tool_name not in _TOOL_REGISTRY:
+            return False
+    return True
+
+
+def has_internal_tools(tools: list[dict[str, Any]] | None) -> bool:
+    """Check if any tools in the list are internal Claude Code tools."""
+    if not tools:
+        return False
+    for tool in tools:
+        t_func = tool.get("function", {})
+        tool_name = t_func.get("name")
+        if tool_name and tool_name in _INTERNAL_TOOLS:
+            return True
+    return False
+
+
 def register_tool(name: str | None = None, *, definition: dict[str, Any] | None = None) -> Any:
     """Register a tool handler.
 
@@ -112,6 +156,7 @@ def register_tool(name: str | None = None, *, definition: dict[str, Any] | None 
 
     Returns:
         Decorator identity function or registers immediately
+
     """
     def decorator(handler: Any) -> Any:
         tool_name = name or handler.__name__
@@ -166,6 +211,7 @@ def register_mcp_tools(mcp_servers: list[dict[str, Any]]) -> None:
 
     Args:
         mcp_servers: List of MCP server configurations
+
     """
     import logging
 
@@ -178,7 +224,7 @@ def register_mcp_tools(mcp_servers: list[dict[str, Any]]) -> None:
     if mcp_spec is None:
         logging.getLogger("blend").warning(
             "MCP package not installed. Install with: pip install mcp. "
-            "Skipping MCP tool registration."
+            "Skipping MCP tool registration.",
         )
         return
 
@@ -193,7 +239,7 @@ def register_mcp_tools(mcp_servers: list[dict[str, Any]]) -> None:
             _discover_mcp_tools(command, args, server_name)
         except Exception:
             logging.getLogger("blend").warning(
-                f"Failed to connect to MCP server '{server_name}': {command} {' '.join(args)}"
+                f"Failed to connect to MCP server '{server_name}': {command} {' '.join(args)}",
             )
 
 
@@ -324,7 +370,7 @@ def _calc_handler(arguments: dict[str, Any] | str) -> str:
         raise ToolError(f"Syntax error: {e}")
 
     # Define safe operations
-    safe_ops: dict[type[ast.operator] | type[ast.unaryop], Any] = {
+    safe_ops: dict[type[ast.operator | ast.unaryop], Any] = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
         ast.Mult: operator.mul,
@@ -459,6 +505,63 @@ register_tool(
 )(_http_handler)
 
 
+def _todowrite_handler(arguments: dict[str, Any] | str) -> str:
+    """Handle todowrite tool calls from Claude Code.
+
+    The todowrite tool is used by Claude Code to manage internal todo state.
+    Since blend doesn't maintain client-side state, we just acknowledge the update.
+    """
+    if isinstance(arguments, dict):
+        args_dict = arguments
+    else:
+        args_dict = json.loads(arguments) if isinstance(arguments, str) else {}
+
+    todos = args_dict.get("todos", [])
+    return json.dumps({"todos": todos, "status": "acknowledged"})
+
+
+register_tool(
+    "todowrite",
+    definition={
+        "type": "function",
+        "function": {
+            "name": "todowrite",
+            "description": "Create and update a todo list tracking progress on tasks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "List of todo items with content, status, and activeForm",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string", "description": "The task description"},
+                                "status": {"type": "string", "description": "pending, in_progress, or completed"},
+                                "activeForm": {"type": "string", "description": "Current action being taken"},
+                            },
+                            "required": ["content"],
+                        },
+                    },
+                },
+                "required": ["todos"],
+            },
+        },
+    },
+)
+
+
+# NOTE: todowrite is registered as an INTERNAL tool.
+# When a tool is in _INTERNAL_TOOLS, blend will return tool_calls to the client
+# instead of executing them server-side. This is because OpenCode has its own
+# internal todowrite tool that it uses for state management.
+
+# NOTE: _INTERNAL_TOOLS is defined at line 102
+# Don't actually register the handler - just mark it as internal
+# _todowrite_handler is not registered, so _INTERNAL_TOOLS will cause
+# tool_calls to be returned to the client without execution
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -475,6 +578,7 @@ def execute_single_tool(
 
     Returns:
         Tool result message dict: {role: "tool", tool_call_id, content}
+
     """
     call_id = tool_call.get("id", "unknown")
     func = tool_call.get("function", {})
@@ -542,6 +646,7 @@ def execute_tool_calls(
 
     Returns:
         list of tool result message dicts (in order)
+
     """
     results: list[dict[str, Any]] = []
     for tc in tool_calls:

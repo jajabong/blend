@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from blend.core.budget import ResourceModel
 from blend.core.enforcer import Enforcer
@@ -13,9 +13,6 @@ from blend.core.executor import Executor
 from blend.core.strategy import StrategyGenerator
 from blend.core.verifier import QualityVerifier
 from blend.intent.scorer import ComplexityScorer
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +240,7 @@ User's Original Goal: {prompt}"""
             tokens_used=l3_output.tokens_used,
             quality_gate_passed=passed,
             l1_compressed=False,
-            thought=getattr(l3_output, "thought", None)
+            thought=getattr(l3_output, "thought", None),
         )
 
     def process_messages(
@@ -275,7 +272,7 @@ User's Original Goal: {prompt}"""
             draft_res = self.executor.execute_messages(
                 messages=[{"role": "user", "content": f"Create a technical draft for: {prompt}"}],
                 complexity=1,
-                task_type="general"
+                task_type="general",
             )
             messages = [{"role": "system", "content": f"Reference Draft (incorporate if useful): {draft_res.content}"}] + messages
             layer_path_parts.append("DRAFT")
@@ -293,18 +290,9 @@ User's Original Goal: {prompt}"""
         l3_output = None
 
         # Check if client already executed tools (role: "tool" messages present)
-        # If so, skip server-side tool execution and filter out tool result messages
-        # (minimax doesn't support role: "tool" messages - it only supports role: "assistant" with tool_calls)
+        # If so, we'll skip server-side tool execution but keep sending tool messages to the LLM
+        # so it can see the tool results and continue the conversation
         client_executed_tools = any(m.get("role") == "tool" for m in messages)
-        if client_executed_tools:
-            tools = None
-            # Filter out tool result messages - they shouldn't be sent to the LLM
-            # Keep: system, user, assistant (non-tool), and the assistant message that initiated the tool call
-            current_messages = [
-                m for m in current_messages
-                if m.get("role") != "tool"
-            ]
-            logger.debug("Client executed tools - filtered tool messages from request")
 
         while tool_loop_iterations < 10:
             l3_output = self.executor.execute_messages(
@@ -329,9 +317,69 @@ User's Original Goal: {prompt}"""
                 break
 
             # If client already executed tools (sent role: "tool" messages), skip server-side execution
+            # and skip verification since client is driving the conversation
+            # Also, do NOT return tool_calls to the client - they should have been executed already
             if client_executed_tools:
-                logger.debug("Client already executed tools, skipping server-side execution")
-                break
+                logger.debug("Client already executed tools, returning content without tool_calls")
+                return OrchestratorResult(
+                    final_output=l3_output.content or "",
+                    layer_path=">".join(layer_path_parts + ["L3", "L5"]),
+                    complexity=complexity,
+                    model_used=l3_output.model_used,
+                    tokens_used=l3_output.tokens_used,
+                    quality_gate_passed=True,
+                    l1_compressed=False,
+                    finish_reason=l3_output.finish_reason,
+                    tool_calls=None,  # Don't send tool_calls back to client
+                    tool_call_count=total_tool_calls,
+                    tool_loop_iterations=tool_loop_iterations,
+                    thought=l3_output.thought,
+                )
+
+            # Check if tools are registered for server-side execution
+            from blend.core.tool_executor import (
+                _INTERNAL_TOOLS,
+                are_tools_registered,
+                has_internal_tools,
+            )
+            if not are_tools_registered(tools or []) or has_internal_tools(tools):
+                # Tools not registered server-side or are internal tools - filter and return to client
+                filtered_tc = None
+                if l3_output.tool_calls:
+                    # Filter out internal tools (todowrite) from tool_calls
+                    filtered_tc = [tc for tc in l3_output.tool_calls
+                                   if tc.get("function", {}).get("name") not in _INTERNAL_TOOLS]
+                if not filtered_tc:
+                    # All tools were filtered out or no tool_calls - return content WITHOUT tool_calls
+                    # Override finish_reason to "stop" since we're not returning tool_calls
+                    return OrchestratorResult(
+                        final_output=l3_output.content or "",
+                        layer_path=">".join(layer_path_parts + ["L3", "L5"]),
+                        complexity=complexity,
+                        model_used=l3_output.model_used,
+                        tokens_used=l3_output.tokens_used,
+                        quality_gate_passed=True,
+                        l1_compressed=False,
+                        finish_reason="stop",  # We're returning content, not tool_calls
+                        tool_calls=None,
+                        tool_call_count=0,
+                        tool_loop_iterations=tool_loop_iterations,
+                        thought=l3_output.thought,
+                    )
+                return OrchestratorResult(
+                    final_output=l3_output.content,
+                    layer_path=">".join(layer_path_parts + ["L3", "TOOL_CALL", "L5"]),
+                    complexity=complexity,
+                    model_used=l3_output.model_used,
+                    tokens_used=l3_output.tokens_used,
+                    quality_gate_passed=True,
+                    l1_compressed=False,
+                    finish_reason=l3_output.finish_reason,
+                    tool_calls=filtered_tc,
+                    tool_call_count=len(filtered_tc),
+                    tool_loop_iterations=tool_loop_iterations,
+                    thought=l3_output.thought,
+                )
 
             # Execute tools and add results back to messages
             from blend.core.tool_executor import execute_tool_calls
@@ -381,7 +429,7 @@ User's Original Goal: {prompt}"""
                     {"role": "system", "content": f"ORIGINAL GOAL: {prompt_snippet}"},
                     {"role": "assistant", "content": final_output},
                     {"role": "user", "content": f"VERIFICATION FAILED: {verification.rejection_reason}\n\n"
-                        f"Only rewrite/fix the specific failing parts. Do NOT repeat or regenerate valid sections."}
+                        f"Only rewrite/fix the specific failing parts. Do NOT repeat or regenerate valid sections."},
                 ]
                 retry_res = self.executor.execute_messages(messages=correction_messages, complexity=complexity, task_type=task_type)
                 final_output = retry_res.content
@@ -399,7 +447,7 @@ User's Original Goal: {prompt}"""
             tool_calls=l3_output.tool_calls,
             tool_call_count=total_tool_calls,
             tool_loop_iterations=tool_loop_iterations,
-            thought=l3_output.thought
+            thought=l3_output.thought,
         )
 
     def stream_messages(self, messages: list[dict[str, Any]], **kwargs: Any) -> Generator[Any, None, None]:
@@ -408,7 +456,7 @@ User's Original Goal: {prompt}"""
         def _extract_text(content: Any) -> str:
             if isinstance(content, str):
                 return content
-            elif isinstance(content, list):
+            if isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
                         return str(item.get("text", ""))

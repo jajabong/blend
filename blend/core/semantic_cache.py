@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -21,6 +22,7 @@ class CacheEntry:
     model_used: str
     tokens_saved: int
     hit_count: int = 0
+    created_at: float = field(default_factory=time.time)  # For TTL calculation
 
 
 @dataclass(frozen=True)
@@ -57,11 +59,13 @@ class SemanticCache:
     - prompt_hash: SHA256 of lowercased prompt (fast, collision-resistant)
     - task_type: task category for cache partitioning
     - pattern signatures: high-freq engineering keywords
+    - TTL: optional expiration time in seconds (None = never expires)
     """
 
-    def __init__(self, max_entries: int = 1000) -> None:
+    def __init__(self, max_entries: int = 1000, ttl_seconds: float | None = None) -> None:
         self._cache: dict[tuple[str, str], CacheEntry] = {}  # (prompt_hash, task_type) -> entry
         self._max_entries = max_entries
+        self._ttl_seconds = ttl_seconds  # None = no expiration
 
     def _compute_hash(self, prompt: str) -> str:
         """Compute SHA256 hash of lowercased prompt."""
@@ -99,6 +103,12 @@ class SemanticCache:
 
         if key in self._cache:
             entry = self._cache.pop(key)
+            # Check TTL expiration
+            if self._ttl_seconds is not None:
+                age = time.time() - entry.created_at
+                if age > self._ttl_seconds:
+                    # Entry expired
+                    return CacheResult(hit=False, reason="ttl_expired")
             # Re-add to mark as recently used (move to end for LRU)
             updated_entry = CacheEntry(
                 prompt=entry.prompt,
@@ -106,6 +116,7 @@ class SemanticCache:
                 model_used=entry.model_used,
                 tokens_saved=entry.tokens_saved,
                 hit_count=entry.hit_count + 1,
+                created_at=entry.created_at,
             )
             self._cache[key] = updated_entry
             return CacheResult(
@@ -122,6 +133,11 @@ class SemanticCache:
             # Look for entries with same signature and high similarity
             for (cache_hash, cache_task), entry in self._cache.items():
                 if cache_task == task_type:
+                    # Check TTL for pattern matches too
+                    if self._ttl_seconds is not None:
+                        age = time.time() - entry.created_at
+                        if age > self._ttl_seconds:
+                            continue  # Skip expired entries in pattern matching
                     # Use actual cached prompt for similarity computation (FIX: was entry.response[:200])
                     if self._compute_similarity(prompt, entry.prompt) > 0.85:
                         return CacheResult(
@@ -144,9 +160,12 @@ class SemanticCache:
     ) -> None:
         """Store a response in the cache."""
         if len(self._cache) >= self._max_entries:
-            # Evict least recently used (simple: first item)
-            first_key = next(iter(self._cache))
-            del self._cache[first_key]
+            # Evict oldest entry (by created_at)
+            oldest_key = min(
+                self._cache.keys(),
+                key=lambda k: self._cache[k].created_at,
+            )
+            del self._cache[oldest_key]
 
         prompt_hash = self._compute_hash(prompt)
         key = (prompt_hash, task_type)
@@ -156,6 +175,7 @@ class SemanticCache:
             model_used=model_used,
             tokens_saved=tokens_saved,
             hit_count=0,
+            created_at=time.time(),
         )
 
     def invalidate(self, prompt: str, task_type: str = "general") -> None:
@@ -176,4 +196,5 @@ class SemanticCache:
             "entries": len(self._cache),
             "total_hits": total_hits,
             "total_tokens_saved": total_tokens_saved,
+            "ttl_seconds": self._ttl_seconds,
         }

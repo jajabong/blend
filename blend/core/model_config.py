@@ -28,7 +28,8 @@ class ModelConfig:
 class ComplexityRouting:
     """Routing config for a complexity range."""
 
-    primary: str
+    max_complexity: int = 0  # Maximum complexity for this tier (from YAML)
+    primary: str = ""
     description: str = ""
 
 
@@ -52,6 +53,18 @@ class DegradationRule:
 
 
 @dataclass(frozen=True)
+class QuotaRule:
+    """Quota rule for a model (Advisor-Judge architecture)."""
+
+    window_hours: float = 0
+    max_calls: int = 0
+    token_per_call: int = 4096
+    max_token_per_call: int = 0
+    strategy: str = "fill_token"
+    role: str = "executor"
+
+
+@dataclass(frozen=True)
 class ModelRegistry:
     """Registry of all model configurations."""
 
@@ -60,6 +73,7 @@ class ModelRegistry:
     gemini_task_types: list[str]
     resource_warnings: ResourceWarnings
     degradation_rules: list[DegradationRule]
+    quota_rules: dict[str, QuotaRule] = field(default_factory=dict)
 
 
 def _find_models_yaml() -> Path:
@@ -81,7 +95,7 @@ def _find_models_yaml() -> Path:
         return home
 
     raise FileNotFoundError(
-        "models.yaml not found. Searched: . , ~/.blend/models.yaml, package directory"
+        "models.yaml not found. Searched: . , ~/.blend/models.yaml, package directory",
     )
 
 
@@ -111,6 +125,7 @@ def load_model_registry() -> ModelRegistry:
     routing: dict[str, ComplexityRouting] = {}
     for key, cfg in raw.get("complexity_routing", {}).items():
         routing[key] = ComplexityRouting(
+            max_complexity=cfg.get("max_complexity", 0),
             primary=cfg["primary"],
             description=cfg.get("description", ""),
         )
@@ -129,7 +144,19 @@ def load_model_registry() -> ModelRegistry:
     deg_rules: list[DegradationRule] = []
     for rule in raw.get("degradation", {}).get("rules", []):
         deg_rules.append(
-            DegradationRule(from_model=rule["from"], to_model=rule["to"])
+            DegradationRule(from_model=rule["from"], to_model=rule["to"]),
+        )
+
+    # Parse quota rules (Advisor-Judge)
+    quota_rules: dict[str, QuotaRule] = {}
+    for key, cfg in raw.get("quota_rules", {}).items():
+        quota_rules[key] = QuotaRule(
+            window_hours=cfg.get("window_hours", 0),
+            max_calls=cfg.get("max_calls", 0),
+            token_per_call=cfg.get("token_per_call", 4096),
+            max_token_per_call=cfg.get("max_token_per_call", 0),
+            strategy=cfg.get("strategy", "fill_token"),
+            role=cfg.get("role", "executor"),
         )
 
     return ModelRegistry(
@@ -138,6 +165,7 @@ def load_model_registry() -> ModelRegistry:
         gemini_task_types=raw.get("gemini_task_types", []),
         resource_warnings=rw,
         degradation_rules=deg_rules,
+        quota_rules=quota_rules,
     )
 
 
@@ -173,5 +201,79 @@ def get_gemini_task_types() -> set[str]:
     """Get Gemini task types set."""
     registry = load_model_registry()
     return set(registry.gemini_task_types)
+
+
+def get_quota_rules() -> dict[str, QuotaRule]:
+    """Get quota rules for Advisor-Judge architecture."""
+    registry = load_model_registry()
+    return registry.quota_rules
+
+
+def get_model_role(model: str) -> str:
+    """Get model role (executor/catalyst/advisor_judge)."""
+    registry = load_model_registry()
+    tier = registry.tiers.get(model)
+    if tier and hasattr(tier, "role"):
+        return tier.role  # type: ignore
+    # 从quota_rules中获取
+    quota = registry.quota_rules.get(model.replace("claude_", "claude_").replace("gemini_", "gemini_"))
+    if quota:
+        return quota.role
+    return "executor"
+
+
+def get_advisor_judge_models() -> list[str]:
+    """Get list of models that should only be used as advisor/judge."""
+    return ["claude_sonnet", "claude_opus", "claude_haiku"]
+
+
+def get_catalyst_models() -> list[str]:
+    """Get list of models that should be used as catalyst."""
+    return ["gemini_flash", "gemini_pro", "gemini_pro_ultra", "gemini_image_flash", "gemini_image_pro"]
+
+
+def get_complexity_thresholds() -> dict[str, int]:
+    """Get complexity thresholds from models.yaml.
+
+    Returns:
+        dict with low_max and medium_max complexity values.
+        These are loaded from complexity_routing config.
+
+    Raises:
+        FileNotFoundError: if models.yaml is not found.
+
+    """
+    registry = load_model_registry()
+    routing = registry.complexity_routing
+
+    low_cfg = routing.get("low")
+    medium_cfg = routing.get("medium")
+
+    # Default values matching legacy hardcoded behavior
+    low_max = low_cfg.max_complexity if low_cfg else 2
+    medium_max = medium_cfg.max_complexity if medium_cfg else 5
+
+    return {
+        "low_max": low_max,
+        "medium_max": medium_max,
+    }
+
+
+def is_low_complexity(complexity: int) -> bool:
+    """Check if complexity is LOW tier."""
+    thresholds = get_complexity_thresholds()
+    return complexity <= thresholds["low_max"]
+
+
+def is_medium_complexity(complexity: int) -> bool:
+    """Check if complexity is MEDIUM tier."""
+    thresholds = get_complexity_thresholds()
+    return thresholds["low_max"] < complexity <= thresholds["medium_max"]
+
+
+def is_high_complexity(complexity: int) -> bool:
+    """Check if complexity is HIGH tier."""
+    thresholds = get_complexity_thresholds()
+    return complexity > thresholds["medium_max"]
 
 

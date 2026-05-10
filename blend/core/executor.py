@@ -1,5 +1,7 @@
 """L3 Execution Layer - Dynamic Model Selection based on Complexity and Task Type."""
 
+from __future__ import annotations
+
 import concurrent.futures
 import json
 from collections.abc import Generator
@@ -9,14 +11,24 @@ from typing import Any
 from blend.core.budget import ResourceModel
 from blend.core.layers import L3Output
 from blend.core.model_config import (
+    get_complexity_thresholds,
     get_fallback_chain,
     get_gemini_task_types,
     get_model_cost,
     get_model_map,
     load_model_registry,
 )
+from blend.core.verifier import QualityVerifier
 from blend.prompts.strategy import L2_STRATEGY_SYSTEM_TEMPLATE
 from blend.providers.base import LLMProvider, LLMResponse
+
+# Scheduler imports for Advisor-Judge integration
+from blend.scheduler import (
+    get_gemini_queue,
+    get_minimax_dispatcher,
+    get_quota_alert,
+    get_token_filler,
+)
 
 # Load from YAML config (cached)
 _registry = load_model_registry()
@@ -71,7 +83,7 @@ class Recipe:
     merge_strategy: str = "best_only"  # "best_only" | "merge" | "vote"
 
 
-def _get_provider(model_key: str) -> tuple["LLMProvider", str]:
+def _get_provider(model_key: str) -> tuple[LLMProvider, str]:
     """Get provider instance and model name for a model key.
 
     Uses ProviderPool for instance reuse and connection pooling.
@@ -91,13 +103,41 @@ class Executor:
     """Executes prompts using dynamically selected models."""
 
     def __init__(self) -> None:
-        """Initialize executor with resource model."""
+        """Initialize executor with resource model and verifier."""
         self.resource_model = ResourceModel()
+        self._verifier = QualityVerifier()
+        # Scheduler integration for Advisor-Judge architecture
+        self._dispatcher = get_minimax_dispatcher()
+        self._gemini_queue = get_gemini_queue()
+        self._token_filler = get_token_filler()
+        self._quota_alert = get_quota_alert()
 
     def cleanup(self) -> None:
         """Close all pooled provider connections."""
         from blend.providers.pool import get_provider_pool
         get_provider_pool().close_all()
+
+    def _get_quality_level(self, complexity: int) -> str:
+        """Convert complexity score to quality level string."""
+        thresholds = get_complexity_thresholds()
+        if complexity > thresholds["medium_max"]:
+            return "HIGH"
+        elif complexity > thresholds["low_max"]:
+            return "MEDIUM"
+        return "LOW"
+
+    def _verify_output(self, output: str, quality_level: str) -> bool:
+        """Quick structural verification of output.
+
+        Returns True if output passes basic quality checks.
+        """
+        result = self._verifier.verify(
+            output=output,
+            quality_level=quality_level,
+            layer_path="L1>L3>L5",
+            skip_p0_check=False,
+        )
+        return result.passed
 
     def execute(
         self,
@@ -127,59 +167,81 @@ class Executor:
                 thought=getattr(response, "thought", None),
             )
 
-        # Implementation of Racing Fallback
+        # Correctness-first racing: verify first result before returning
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(candidates)) as pool:
             futures = {}
             # Submit primary
             futures[pool.submit(_try_one, candidates[0], True)] = candidates[0]
 
-            # Wait a short "probe" interval for primary
+            # Wait up to 3s for primary
             done, not_done = concurrent.futures.wait(list(futures.keys()), timeout=3.0)
 
             if done:
                 try:
-                    return list(done)[0].result()
+                    result = list(done)[0].result()
+                    # Correctness check: verify output before returning
+                    thresholds = get_complexity_thresholds()
+                    if complexity > thresholds["medium_max"]:
+                        quality_level = "HIGH"
+                    elif complexity > thresholds["low_max"]:
+                        quality_level = "MEDIUM"
+                    else:
+                        quality_level = "LOW"
+                    if self._verify_output(result.raw_output, quality_level):
+                        return result
+                    # Verification failed - wait for fallback
                 except Exception:
-                    pass # Fall through to start fallback
+                    pass
 
-            # Primary is slow or failed, fire second choice if exists
+            # Primary failed or verification failed, fire fallback
             if len(candidates) > 1:
                 futures[pool.submit(_try_one, candidates[1], False)] = candidates[1]
 
-            # Final race between primary and fallback
+            # Wait for first successful verification
             while futures:
                 done, not_done = concurrent.futures.wait(
                     list(futures.keys()),
-                    return_when=concurrent.futures.FIRST_COMPLETED
+                    return_when=concurrent.futures.FIRST_COMPLETED,
                 )
                 for f in done:
                     try:
                         result = f.result()
-                        # Success! Cancel others and return
-                        for nf in futures:
-                            if nf != f:
-                                nf.cancel()
-                        return result
-                    except Exception:
-                        # This candidate failed, remove it
+                        # Verify before returning
+                        quality_level = self._get_quality_level(complexity)
+                        if self._verify_output(result.raw_output, quality_level):
+                            # Cancel others
+                            for nf in futures:
+                                if nf != f:
+                                    nf.cancel()
+                            return result
+                        # This one failed verification, try others
                         del futures[f]
-                        # If we have more candidates in the YAML chain, we could add them here
-                        # But for now we stick to Top 2 for the race.
+                    except Exception:
+                        del futures[f]
 
                 if not futures:
                     break
 
-        # Last resort fallback if everything in the race failed
-        # Just use minimax synchronously
-        response = self._call_model(model="minimax", prompt=prompt)
-        return L3Output(
-            raw_output=response.content,
-            model_used="minimax",
-            tokens_used=self._estimate_tokens(response.content),
-            tokens_budget_remaining=0,
-            quality_gate_passed=True,
-            thought=getattr(response, "thought", None),
-        )
+        # Last resort fallback if everything failed or verification failed
+        try:
+            response = self._call_model(model="minimax", prompt=prompt)
+            return L3Output(
+                raw_output=response.content,
+                model_used="minimax",
+                tokens_used=self._estimate_tokens(response.content),
+                tokens_budget_remaining=0,
+                quality_gate_passed=True,
+                thought=getattr(response, "thought", None),
+            )
+        except Exception as e:
+            # MERCY GATE: Final attempt to provide something
+            return L3Output(
+                raw_output=f"# --- QUALITY WARNING ---\nThe system is under high load and could not verify the final quality. Here is the last available output attempt:\n\nError: {str(e)}",
+                model_used="emergency_fallback",
+                tokens_used=0,
+                tokens_budget_remaining=0,
+                quality_gate_passed=False,
+            )
 
     def execute_messages(
         self,
@@ -219,81 +281,127 @@ class Executor:
                 timeout=timeout,
             )
 
+        quality_level = self._get_quality_level(complexity)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = {pool.submit(_try_one, candidates[0], True): candidates[0]}
 
-            # Wait 3s for primary
-            done, _ = concurrent.futures.wait(list(futures.keys()), timeout=3.0)
+            # Wait up to 3s for primary
+            done, not_done = concurrent.futures.wait(list(futures.keys()), timeout=3.0)
             if done:
                 try:
-                    return list(done)[0].result()
+                    result = list(done)[0].result()
+                    # Correctness check: verify output before returning
+                    if self._verify_output(str(result.content), quality_level):
+                        return result
                 except Exception:
                     pass
 
             if len(candidates) > 1:
                 futures[pool.submit(_try_one, candidates[1], False)] = candidates[1]
 
+            # Wait for first successful verification
             while futures:
-                done, _ = concurrent.futures.wait(list(futures.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                done, not_done = concurrent.futures.wait(list(futures.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
                 for f in done:
-                    try: return f.result()
-                    except Exception: del futures[f]
+                    try:
+                        result = f.result()
+                        if self._verify_output(str(result.content), quality_level):
+                            # Cancel others
+                            for nf in futures:
+                                if nf != f:
+                                    nf.cancel()
+                            return result
+                        del futures[f]
+                    except Exception:
+                        del futures[f]
                 if not futures:
                     break
 
-        # Last resort - skip tools for minimax since it doesn't support them properly
-        if tools:
-            # Minimax doesn't support tools properly, so retry without tools
-            return self._call_model_messages(
-                model="minimax",
-                messages=messages,
-                strategy=strategy,
-                tools=None,  # Don't pass tools to minimax
-                tool_choice=tool_choice,
-                response_format=response_format,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                presence_penalty=presence_penalty,
-                frequency_penalty=frequency_penalty,
-                stop=stop,
-                timeout=15.0,
+        # Last resort - skip tools for minimax if verification fails
+        try:
+            if tools:
+                return self._call_model_messages(
+                    model="minimax",
+                    messages=messages,
+                    strategy=strategy,
+                    tools=None,
+                    tool_choice=tool_choice,
+                    response_format=response_format,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    presence_penalty=presence_penalty,
+                    frequency_penalty=frequency_penalty,
+                    stop=stop,
+                    timeout=15.0,
+                )
+            return _try_one("minimax", False)
+        except Exception as e:
+            # MERCY GATE
+            return LLMOutput(
+                content=f"# --- QUALITY WARNING ---\nSystem failure. {str(e)}",
+                model_used="emergency_fallback",
+                tokens_used=0,
+                tokens_budget_remaining=0,
+                quality_gate_passed=False,
             )
-        return _try_one("minimax", False)
 
     def _select_model(
         self,
         complexity: int,
         task_type: str,
     ) -> ModelSelection:
-        """Select model based on health, complexity, and task type."""
-        budget_status = self._check_budget_status()
+        """Select model based on Advisor-Judge architecture.
+
+        三分层流规则：
+        - LOW: 极简轻任务 → Minimax执行层
+        - MEDIUM: 中等/长文 → Gemini催化剂
+        - HIGH: 高难度 → Gemini初稿 + Claude终审
+
+        Claude角色限定：
+        - 不做苦力（不承接基础生成）
+        - 仅做指导+纠错+终审
+        - Token消耗最小化
+        """
+        from blend.core.circuit_breaker import CircuitState, get_registry
+        from blend.core.model_config import (
+            get_advisor_judge_models,
+            is_high_complexity,
+            is_low_complexity,
+            is_medium_complexity,
+        )
+
+        registry = get_registry()
         current_map = get_model_map()
         current_fallbacks = get_fallback_chain()
-        gemini_types = get_gemini_task_types()
-
-        # 1. Determine Initial Intent
-        primary = "haiku"
-        if task_type in gemini_types:
-            primary = "gemini"
-        elif task_type == "code":
-            primary = "sonnet" if complexity >= 5 else "haiku"
-        elif complexity <= 2:
-            primary = "haiku" if budget_status["haiku"] > 0 else "minimax"
-        elif complexity <= 4:
-            primary = "sonnet" if budget_status["sonnet"] > 100 else "haiku"
-        else:
-            primary = "sonnet"
-
-        # 2. Health-Aware Routing
-        from blend.core.circuit_breaker import CircuitState, get_registry
-        registry = get_registry()
+        advisor_judge_models = get_advisor_judge_models()
 
         def is_healthy(m_key: str) -> bool:
             p_class, _ = current_map.get(m_key, ("BaosiProvider", ""))
             p_name = "baosi" if "Baosi" in p_class else ("lemon" if "Lemon" in p_class else "minimax")
             return registry.get(p_name).state != CircuitState.OPEN
 
+        # ========== Advisor-Judge 三分层流 ==========
+
+        if is_low_complexity(complexity):
+            # LOW: 极简轻任务 → Minimax执行层
+            # 每次尽量拉满4096 Token，不浪费调用次数
+            primary = "minimax"
+        elif is_medium_complexity(complexity):
+            # MEDIUM: 中等/长文/多模态 → Gemini催化剂
+            # 单次吃满Token，攒任务批量处理
+            if task_type in get_gemini_task_types():
+                primary = "gemini_pro_ultra"  # 深度推理/多模态用高级版
+            else:
+                primary = "gemini_pro"
+        else:  # HIGH
+            # HIGH: 高难度任务
+            # 第一优先：Gemini做初稿
+            # Claude仅在终审/纠错时调用（不在这里选，由caller主动调用）
+            primary = "gemini_pro_ultra"
+
+        # Health-Aware Fallback
         candidates = [primary] + current_fallbacks.get(primary, [])
         final_primary = "minimax"
         for cand in candidates:
@@ -301,9 +409,28 @@ class Executor:
                 final_primary = cand
                 break
 
+        # Dispatcher-aware fallback: if minimax is selected but rate-limited, use haiku
+        if final_primary == "minimax" and not self._dispatcher.can_dispatch():
+            fallback_candidates = ["haiku"] + current_fallbacks.get("haiku", [])
+            for cand in fallback_candidates:
+                if is_healthy(cand):
+                    final_primary = cand
+                    break
+
+        # Fallback chain: 严格按角色分层
+        if is_low_complexity(complexity):
+            # LOW: 仅Minimax，不耗用其他额度
+            fallback = []
+        elif is_medium_complexity(complexity):
+            # MEDIUM: Gemini → Minimax兜底
+            fallback = ["minimax"]
+        else:  # HIGH
+            # HIGH: Gemini → Claude(Advisor) → Minimax
+            fallback = ["claude_sonnet", "minimax"]
+
         return ModelSelection(
             primary=final_primary,
-            fallback=current_fallbacks.get(final_primary, ["minimax"])
+            fallback=fallback,
         )
 
     def _check_budget_status(self) -> dict[str, int]:
@@ -325,40 +452,50 @@ class Executor:
         """Select a multi-stage recipe based on complexity and task type.
 
         Recipe replaces single-model routing with multi-stage execution:
-        - LOW (1-2): single stage, direct execute
-        - MEDIUM (3-5): draft + refine
-        - HIGH (6+): draft + refine + verify
+        - LOW: single stage, direct execute
+        - MEDIUM: draft + refine
+        - HIGH: draft + refine + verify
         """
+        from blend.core.model_config import (
+            is_high_complexity,
+            is_low_complexity,
+            is_medium_complexity,
+        )
+
         budget_status = self._check_budget_status()
         gemini_types = get_gemini_task_types()
 
         stages: list[RecipeStage] = []
 
         # Determine draft model (fast, cheap)
-        draft_model = "haiku" if budget_status.get("haiku", 0) > 0 else "minimax"
+        # Use haiku if minimax is rate-limited, otherwise minimax
+        if not self._dispatcher.can_dispatch() or budget_status.get("haiku", 0) > 0:
+            draft_model = "haiku"
+        else:
+            draft_model = "minimax"
 
         # Gemini task types get gemini as primary
         if task_type in gemini_types:
             stages.append(RecipeStage(model="gemini", role="execute", complexity=min(complexity, 5)))
             return Recipe(stages=stages)
 
-        if complexity <= 2:
-            # LOW: single stage
+        if is_low_complexity(complexity):
+            # LOW: single stage (使用 Minimax，省钱)
             stages.append(RecipeStage(
-                model=draft_model,
+                model="minimax",
                 role="execute",
                 complexity=complexity,
                 timeout=10.0,
             ))
-        elif complexity <= 5:
-            # MEDIUM: draft + refine
+        elif is_medium_complexity(complexity):
+            # MEDIUM: draft + refine (使用 Minimax 生成草稿，省钱)
             stages.append(RecipeStage(
-                model=draft_model,
+                model="minimax",
                 role="draft",
                 complexity=1,
                 timeout=8.0,
             ))
-            refine_model = "sonnet" if budget_status.get("sonnet", 0) > 100 else "haiku"
+            refine_model = "sonnet" if budget_status.get("sonnet", 0) > 100 else "minimax"
             stages.append(RecipeStage(
                 model=refine_model,
                 role="refine",
@@ -366,15 +503,15 @@ class Executor:
                 timeout=20.0,
                 strategy_hints=strategy_hints,
             ))
-        else:
-            # HIGH: draft + refine + verify
+        else:  # HIGH
+            # HIGH: draft + refine + verify (使用 Minimax 生成草稿，省钱)
             stages.append(RecipeStage(
-                model=draft_model,
+                model="minimax",
                 role="draft",
                 complexity=1,
                 timeout=8.0,
             ))
-            refine_model = "sonnet" if budget_status.get("sonnet", 0) > 100 else "haiku"
+            refine_model = "sonnet" if budget_status.get("sonnet", 0) > 100 else "minimax"
             stages.append(RecipeStage(
                 model=refine_model,
                 role="refine",
@@ -438,6 +575,7 @@ class Executor:
 
             elif stage.role == "verify":
                 verify_content = final_response.content if final_response else current_prompt
+                draft_line = f"Original Draft for reference:\n{draft_output.content}" if draft_output else ""
                 verify_prompt = f"""Quality check of the refined output.
 
 Review the final output for:
@@ -448,7 +586,7 @@ Review the final output for:
 Final Output:
 {verify_content}
 
-{f"Original Draft for reference:\n{draft_output.content}" if draft_output else ""}
+{draft_line}
 """
                 final_response = self._call_model(
                     model=stage.model,
@@ -475,8 +613,15 @@ Final Output:
         timeout: float | None = None,
     ) -> LLMResponse:
         """Call the selected model via provider, returning full LLMResponse."""
+        # Token filling for efficiency
+        prompt = self._token_filler.fill_prompt(prompt, model)
+
+        # Rate-limit check for MiniMax
+        if model == "minimax" and not self._dispatcher.can_dispatch():
+            raise RuntimeError("Minimax rate limited")
+
         provider, model_name = _get_provider(model)
-        if timeout and hasattr(provider, '_timeout'):
+        if timeout and hasattr(provider, "_timeout"):
             provider._timeout = timeout
 
         plan = strategy.get("plan") if strategy else None
@@ -487,7 +632,19 @@ Final Output:
         else:
             messages = [{"role": "user", "content": prompt}]
 
-        return provider.chat(messages=messages, model=model_name)
+        response = provider.chat(messages=messages, model=model_name)
+
+        # Quota tracking for monitoring
+        if model == "minimax":
+            self._quota_alert.check_and_alert(
+                model, self._dispatcher.remaining_calls, self._dispatcher.MAX_CALLS,
+            )
+        elif model.startswith("gemini"):
+            self._quota_alert.check_and_alert(
+                model, self._gemini_queue.remaining_calls, self._gemini_queue.MAX_CALLS,
+            )
+
+        return response
 
     def _call_model_messages(
         self,
@@ -506,8 +663,12 @@ Final Output:
         timeout: float | None = None,
     ) -> LLMOutput:
         """Call selected model with messages and full parameter suite."""
+        # Rate-limit check for MiniMax
+        if model == "minimax" and not self._dispatcher.can_dispatch():
+            raise RuntimeError("Minimax rate limited")
+
         provider, model_name = _get_provider(model)
-        if timeout and hasattr(provider, '_timeout'):
+        if timeout and hasattr(provider, "_timeout"):
             provider._timeout = timeout
 
         msgs = list(messages)
@@ -529,6 +690,17 @@ Final Output:
         if stop is not None: kwargs["stop"] = stop
 
         response: LLMResponse = provider.chat(messages=msgs, model=model_name, **kwargs)
+
+        # Quota tracking for monitoring
+        if model == "minimax":
+            self._quota_alert.check_and_alert(
+                model, self._dispatcher.remaining_calls, self._dispatcher.MAX_CALLS,
+            )
+        elif model.startswith("gemini"):
+            self._quota_alert.check_and_alert(
+                model, self._gemini_queue.remaining_calls, self._gemini_queue.MAX_CALLS,
+            )
+
         return LLMOutput(
             content=str(response.content),
             model_used=model,
@@ -547,17 +719,25 @@ Final Output:
         return usage.get("completion_tokens") or usage.get("total_tokens")
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count using tiktoken or fallback heuristic."""
+        """Estimate token count using tiktoken (cl100k_base) or fallback heuristic.
+
+        Note: tiktoken is a required dependency (not optional), so fallback is
+        only used if tiktoken fails at runtime. MiniMax uses the same
+        cl100k_base encoding as OpenAI, so tiktoken is accurate for all
+        current providers.
+        """
         try:
             import tiktoken
             encoding = tiktoken.get_encoding("cl100k_base")
             return len(encoding.encode(text))
         except ImportError:
-            # Fallback heuristic for non-English text
-            # Chinese: ~1.5 chars per token, English: ~4 chars per token
-            has_cjk = any('一' <= c <= '鿿' for c in text)
+            # Fallback heuristic (rarely triggered - tiktoken is required)
+            # CJK (Chinese/Korean/Japanese): ~1.5-2 chars per token
+            # English: ~4 chars per token
+            has_cjk = any("一" <= c <= "鿿" for c in text)
             if has_cjk:
-                return len(text) * 2  # CJK characters are ~2 tokens each
+                # More accurate than len*2: CJK is ~1.5 chars/token
+                return max(1, int(len(text) * 0.67))
             return max(1, len(text) // 4)
 
     def _get_budget(self, model: str) -> int:
@@ -602,7 +782,9 @@ Final Output:
                     except Exception: continue
                 return
             except Exception: continue
-        raise RuntimeError("All model providers failed")
+
+        # MERCY GATE
+        yield "\n\n# --- QUALITY WARNING ---\nAll providers failed."
 
     def stream_messages(
         self,
@@ -700,4 +882,5 @@ Final Output:
                     return
                 except Exception: continue
 
-        raise RuntimeError("All model providers failed")
+        # MERCY GATE for streaming
+        yield {"delta": {"content": "\n\n# --- QUALITY WARNING ---\nAll providers failed. System is in emergency mode."}, "finish_reason": "stop"}

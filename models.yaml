@@ -1,78 +1,111 @@
-# Blend 终极统筹精算配置 (v2.3.0)
-# 核心原则：短回答走 Baosi(按量)，长回答走 Lemon(按次)，兜底走 Minimax(免费)
+# Blend 模型配置 (v2.5.0)
+# 路由原则：低复杂度→minimax省钱，高复杂度→gemini，Claude走Baosi代理
 
 tiers:
-  # --- Baosi (按 Token 计费: 适合精准、短回答) ---
-  haiku:
-    provider: BaosiProvider
-    model_name: "claude-haiku-4-5-20251001"
-    tier: L3_LIGHT
-    cost_per_1k: 0.003
-    fallback: [gemini, minimax]
-
-  sonnet:
+  # === Claude 系列 (Baosi 代理到真实 Claude API) ===
+  claude_sonnet:
     provider: BaosiProvider
     model_name: "claude-sonnet-4-6"
     tier: L3_MAIN
     cost_per_1k: 0.015
-    fallback: [gemini_pro, gemini, minimax]
+    fallback: [minimax, gemini_pro]
+    role: advisor_judge  # Claude仅做催化剂
 
-  opus:
+  claude_opus:
     provider: BaosiProvider
     model_name: "claude-opus-4-7"
     tier: L2_L5_HIGH
     cost_per_1k: 0.075
-    fallback: [gemini_pro_ultra, sonnet]
+    fallback: [claude_sonnet, gemini_pro_ultra]
+    role: advisor_judge
 
-  # --- Lemon (按次计费: 适合长文、重型推理、画图) ---
-  gemini:
+  claude_haiku:
+    provider: BaosiProvider
+    model_name: "claude-haiku-4-5-20251001"
+    tier: L3_LIGHT
+    cost_per_1k: 0.003
+    fallback: [minimax, gemini_flash]
+    role: advisor_judge
+
+  # === Gemini 系列 (Lemon 按次计费) - 催化剂主力 ===
+  gemini_flash:
     provider: LemonProvider
-    model_name: "[L]gemini-3-flash-preview"
+    model_name: "gemini-3-flash-preview"
     tier: L3_BATCH
-    cost_per_1k: 0.0014 # 映射 1.4 额度
+    cost_per_1k: 0.0014
     fallback: [minimax]
+    role: catalyst  # 弹性催化剂，按次计费
 
   gemini_pro:
     provider: LemonProvider
-    model_name: "[L]gemini-3-pro-preview"
+    model_name: "gemini-3-pro-preview"
     tier: L3_BATCH_PRO
-    cost_per_1k: 0.00875 # 按次 8.75 额度
+    cost_per_1k: 0.00875
     fallback: [gemini_pro_ultra, minimax]
-      
+    role: catalyst
+
   gemini_pro_ultra:
     provider: LemonProvider
-    model_name: "[L]gemini-3.1-pro-preview"
+    model_name: "gemini-3.1-pro-preview"
     tier: L2_L5_HIGH
-    cost_per_1k: 0.0105 # 按次 10.5 额度
-    fallback: [minimax]
+    cost_per_1k: 0.0105
+    fallback: [claude_sonnet, minimax]
+    role: catalyst
 
   gemini_image_flash:
     provider: LemonProvider
-    model_name: "[L]gemini-3.1-flash-image-preview"
+    model_name: "gemini-3.1-flash-image-preview"
     tier: SPECIALIZED
-    cost_per_1k: 0.031 # 映射 31 额度
+    cost_per_1k: 0.031
+    role: catalyst
 
   gemini_image_pro:
     provider: LemonProvider
-    model_name: "[L]gemini-3-pro-image-preview"
+    model_name: "gemini-3-pro-image-preview"
     tier: SPECIALIZED
-    cost_per_1k: 0.085 # 映射 85 额度
+    cost_per_1k: 0.085
+    role: catalyst
 
-  # --- Minimax (基础代谢: 几乎免费) ---
+  # === Minimax (基础执行层) - 5h窗口4000次 ===
   minimax:
     provider: MinimaxProvider
     model_name: "MiniMax-M2.7"
     tier: L1
     cost_per_1k: 0.001
+    fallback: []
+    role: executor  # 基础执行层，必须匀速跑满
 
-# 统筹逻辑路由
+# 额度规则（严格按你的三套资源）
+quota_rules:
+  minimax:
+    window_hours: 5
+    max_calls: 4000
+    token_per_call: 4096
+    strategy: fill_token  # 每次尽量拉满Token
+
+  gemini:
+    total_calls: 15000
+    token_per_call: 64000  # 单次最大64K
+    strategy: batch_then_catalyst  # 攒任务批量处理
+
+  claude:
+    monthly_budget_usd: 15000  # 授信额度
+    token_per_call: 1024  # 仅做催化剂，不重写全文
+    strategy: advisor_judge_only  # 仅指导+终审
+
+# 复杂度路由（重新设计贴合你的三分流）
 complexity_routing:
-  low:
+  low:        # 极简轻任务 → MiniMax
+    max_complexity: 2
     primary: minimax
-  medium:
-    primary: haiku
-  high:
-    primary: gemini_pro_ultra
+    token_fill: 3800-4096
+  medium:     # 中等/长文 → Gemini催化剂
+    max_complexity: 5
+    primary: gemini_pro
+    token_fill: 30000-64000
+  high:       # 高难度 → Claude终审
+    primary: claude_sonnet
+    token_limit: 1024  # 仅输出修改意见
 
 # 专项任务强制路由
 gemini_task_types:

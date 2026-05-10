@@ -45,6 +45,7 @@ class StrategyGenerator:
 
         Returns:
             StrategyResult with L2Output and truncation flag
+
         """
         plan: list[str]
         redlines: list[str]
@@ -88,6 +89,7 @@ class StrategyGenerator:
 
         Returns:
             tuple of (plan, redlines, boundary_cases, model_recommendation)
+
         """
         provider = BaosiProvider()
         messages = [

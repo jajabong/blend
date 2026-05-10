@@ -11,11 +11,16 @@ from typing import Any
 class Config:
     """Application configuration loaded from environment."""
 
-    MINIMAX_API_KEY: str
+    MINIMAX_API_KEYS: list[str]
     BAOSI_API_KEY: str
     LEMON_API_KEY: str
     PORT: int
     LOG_LEVEL: str
+
+    @property
+    def MINIMAX_API_KEY(self) -> str:
+        """Backward compatibility: return the first key."""
+        return self.MINIMAX_API_KEYS[0] if self.MINIMAX_API_KEYS else ""
 
 
 @lru_cache(maxsize=1)
@@ -29,15 +34,23 @@ def get_config() -> Config:
 
     Raises:
         ValueError: If required API keys are missing
+
     """
-    minimax_key = os.environ.get("MINIMAX_API_KEY", "")
+    # Support multiple Minimax keys
+    minimax_keys_raw = os.environ.get("MINIMAX_API_KEYS", "")
+    if minimax_keys_raw:
+        minimax_keys = [k.strip() for k in minimax_keys_raw.split(",") if k.strip()]
+    else:
+        minimax_key = os.environ.get("MINIMAX_API_KEY", "")
+        minimax_keys = [minimax_key] if minimax_key else []
+
     baosi_key = os.environ.get("BAOSI_API_KEY", "")
     lemon_key = os.environ.get("LEMON_API_KEY", "")
     port = int(os.environ.get("PORT", "8000"))
     log_level = os.environ.get("LOG_LEVEL", "INFO")
 
     return Config(
-        MINIMAX_API_KEY=minimax_key,
+        MINIMAX_API_KEYS=minimax_keys,
         BAOSI_API_KEY=baosi_key,
         LEMON_API_KEY=lemon_key,
         PORT=port,
@@ -45,15 +58,17 @@ def get_config() -> Config:
     )
 
 
-def get_config_dict() -> dict[str, str]:
+def get_config_dict() -> dict[str, Any]:
     """Load all configuration as a dictionary.
 
     Returns:
         Dictionary with all configuration values
+
     """
     config = get_config()
     return {
-        "MINIMAX_API_KEY": config.MINIMAX_API_KEY,
+        "MINIMAX_API_KEYS": config.MINIMAX_API_KEYS,
+        "MINIMAX_API_KEY": config.MINIMAX_API_KEY,  # Backward compatibility
         "BAOSI_API_KEY": config.BAOSI_API_KEY,
         "LEMON_API_KEY": config.LEMON_API_KEY,
         "PORT": str(config.PORT),
@@ -69,9 +84,17 @@ def require_keys(*keys: str) -> None:
 
     Raises:
         ValueError: If any required key is missing or empty
+
     """
     config_dict = get_config_dict()
-    missing = [key for key in keys if not config_dict.get(key)]
+    missing = []
+    for key in keys:
+        val = config_dict.get(key)
+        if not val:
+            missing.append(key)
+        elif isinstance(val, list) and not val:
+            missing.append(key)
+
     if missing:
         raise ValueError(f"Missing required configuration keys: {', '.join(missing)}")
 
@@ -81,12 +104,13 @@ def validate_config() -> list[str]:
 
     Returns:
         List of error messages (empty if all valid)
+
     """
     errors: list[str] = []
     config = get_config()
 
-    if not config.MINIMAX_API_KEY:
-        errors.append("MINIMAX_API_KEY is required")
+    if not config.MINIMAX_API_KEYS:
+        errors.append("MINIMAX_API_KEY or MINIMAX_API_KEYS is required")
 
     if not config.BAOSI_API_KEY:
         errors.append("BAOSI_API_KEY is required")
@@ -105,6 +129,7 @@ def get_mcp_servers() -> list[dict[str, Any]]:
 
     Returns:
         List of MCP server configs, empty list if not configured
+
     """
     raw = os.environ.get("BLEND_MCP_SERVERS", "")
     if not raw:

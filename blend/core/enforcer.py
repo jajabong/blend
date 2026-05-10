@@ -117,6 +117,7 @@ class Enforcer:
 
         Returns:
             EnforcementResult with allowed status and violations
+
         """
         violations: list[TabooViolation] = []
 
@@ -149,8 +150,8 @@ class Enforcer:
             taboo = self._find_taboo(TabooType.GEMINI_SCATTERED)
             return [
                 TabooViolation(
-                    taboo=taboo, reason=f"Gemini context usage {context_percent}% < 50% threshold"
-                )
+                    taboo=taboo, reason=f"Gemini context usage {context_percent}% < 50% threshold",
+                ),
             ]
         return []
 
@@ -179,7 +180,7 @@ class Enforcer:
         if "L5" not in layer_path:
             taboo = self._find_taboo(TabooType.BYPASS_L5)
             violations.append(
-                TabooViolation(taboo=taboo, reason="Request bypassed L5 verification")
+                TabooViolation(taboo=taboo, reason="Request bypassed L5 verification"),
             )
 
         # Check for L2 requirement in HIGH complexity (>= 6 with new thresholds)
@@ -187,8 +188,8 @@ class Enforcer:
             taboo = self._find_taboo(TabooType.CROSS_LAYER_JUMP)
             violations.append(
                 TabooViolation(
-                    taboo=taboo, reason=f"HIGH complexity (≥6) requires L2 but path is {layer_path}"
-                )
+                    taboo=taboo, reason=f"HIGH complexity (≥6) requires L2 but path is {layer_path}",
+                ),
             )
 
         return violations
@@ -224,8 +225,8 @@ class Enforcer:
                 taboo = self._find_taboo(TabooType.HARDCODED_CREDENTIALS)
                 violations.append(
                     TabooViolation(
-                        taboo=taboo, reason="Hardcoded credential pattern detected in request"
-                    )
+                        taboo=taboo, reason="Hardcoded credential pattern detected in request",
+                    ),
                 )
                 break
 
